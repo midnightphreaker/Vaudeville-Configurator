@@ -75,7 +75,7 @@ jobs:
       - name: checks
         run: |
           set -euo pipefail
-          python3 vaudville_configurator.py --selftest
+          python3 vaudville_configurator.py --selftest --ci
           bash -n tests/run_e2e_test.sh tests/run_direct_llama_test.sh \
                   tests/run_real_backend_test.sh tools/build_package.sh
           if command -v Xvfb >/dev/null 2>&1; then
@@ -107,26 +107,73 @@ jobs:
     runs-on: windows-x86_64
     steps:
       - uses: actions/checkout@v4
+      - name: probe runner environment
+        id: probe
+        shell: bash
+        run: |
+          os="$(uname -s 2>/dev/null || echo unknown)"
+          case "$os" in
+            MINGW*|MSYS*|CYGWIN*|Windows*) real=true ;;
+            *) real=false ;;
+          esac
+          echo "uname=$os real_windows=$real wine=$(command -v wine64 wine 2>/dev/null | head -n1 || true)"
+          echo "real_windows=$real" >> "$GITHUB_OUTPUT"
       - name: apply version bump to build inputs
         if: needs.gate.outputs.bump == 'true'
-        run: python tools/bump_version.py "${{ needs.gate.outputs.version }}"
-      - name: checks
-        run: python vaudville_configurator.py --selftest
-      - name: build single-file exe
-        run: tools\build_package.cmd
-      - name: package
-        shell: pwsh
+        shell: bash
         run: |
-          $v = "${{ needs.gate.outputs.version }}"
-          $name = "${{ env.REPO_NAME }}.v$v-windows-x86_64.zip"
-          New-Item -ItemType Directory -Force pkg | Out-Null
-          Copy-Item dist\VaudvilleConfigurator.exe, README.md, VERSION pkg\
-          Compress-Archive -Path pkg\* -DestinationPath $name
-          Get-FileHash $name | Format-List
+          if command -v python3 >/dev/null 2>&1; then python3 tools/bump_version.py "${{ needs.gate.outputs.version }}"
+          else python tools/bump_version.py "${{ needs.gate.outputs.version }}"; fi
+      - name: checks
+        shell: bash
+        run: |
+          if command -v python3 >/dev/null 2>&1; then python3 vaudville_configurator.py --selftest --ci
+          else python vaudville_configurator.py --selftest --ci; fi
+      - name: build single-file exe (real Windows only)
+        if: steps.probe.outputs.real_windows == 'true'
+        shell: bash
+        run: |
+          if command -v py >/dev/null 2>&1; then PY="py -3"; else PY="python"; fi
+          if [ ! -x .venv-build/Scripts/pyinstaller.exe ]; then
+            $PY -m venv .venv-build
+            .venv-build/Scripts/python -m pip install --upgrade pip
+            .venv-build/Scripts/python -m pip install pyinstaller
+          fi
+          .venv-build/Scripts/pyinstaller --onefile --clean --name VaudvilleConfigurator vaudville_configurator.py
+      - name: package exe
+        if: steps.probe.outputs.real_windows == 'true'
+        shell: bash
+        run: |
+          v="${{ needs.gate.outputs.version }}"
+          name="${REPO_NAME}.v${v}-windows-x86_64.zip"
+          if command -v python3 >/dev/null 2>&1; then PY=python3; else PY=python; fi
+          $PY -m zipfile -c "$name" dist/VaudvilleConfigurator.exe README.md VERSION
+          ls -la "$name"
+      - name: packaged-source fallback (no real Windows runner)
+        if: steps.probe.outputs.real_windows == 'false' && vars.ALLOW_WINDOWS_SOURCE_FALLBACK == 'true'
+        shell: bash
+        run: |
+          v="${{ needs.gate.outputs.version }}"
+          name="${REPO_NAME}.v${v}-windows-x86_64-source.zip"
+          echo "### no real Windows runner on this label: packaging interpreted source (output family F3)"
+          if command -v python3 >/dev/null 2>&1; then PY=python3; else PY=python; fi
+          $PY -m zipfile -c "$name" vaudville_configurator.py VERSION README.md tools tests
+          ls -la "$name"
+      - name: refuse without a real Windows runner
+        if: steps.probe.outputs.real_windows == 'false' && vars.ALLOW_WINDOWS_SOURCE_FALLBACK != 'true'
+        shell: bash
+        run: |
+          echo "ERROR: the windows-x86_64 label was served by a Linux runner ($(uname -s))." >&2
+          echo "PyInstaller cannot cross-compile a Windows exe on Linux. Either register" >&2
+          echo "act_runner on a Windows host (VLM_RUNNER_TOKEN=... tools/register_runner.sh windows)" >&2
+          echo "and remove the windows-* labels from the Linux runners, or set the repository" >&2
+          echo "variable ALLOW_WINDOWS_SOURCE_FALLBACK=true to publish the F3 packaged-source" >&2
+          echo "zip for Windows until a real Windows runner exists." >&2
+          exit 1
       - uses: actions/upload-artifact@v4
         with:
           name: windows-x86_64
-          path: "${{ env.REPO_NAME }}.*-windows-x86_64.zip"
+          path: "${{ env.REPO_NAME }}.*-windows-x86_64*.zip"
 
   publish:
     needs: [gate, build-linux, build-windows]

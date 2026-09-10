@@ -746,6 +746,14 @@ Assets: `Vaudville-Configurator.v<ver>-linux-amd64.tar.gz` and
 `Vaudville-Configurator.v<ver>-windows-x86_64.zip` (binary + README + VERSION inside).
 A `retry` reuses the release of the *same* commit and refuses tags owned by other commits.
 
+Jobs run wherever the matching label lives. `build-windows` probes its runner
+(`uname`): on a real Windows host it builds the `.exe`; if the label is served by a
+Linux runner (PyInstaller cannot cross-compile) it either packages the interpreted
+source as `…-windows-x86_64-source.zip` when the repository variable
+`ALLOW_WINDOWS_SOURCE_FALLBACK` is `true` (output family F3), or fails with
+instructions. Checks use `--selftest --ci`, which skips the game-dependent sections
+on runners that have no Vaudeville install.
+
 The workflow needs **two runners** (none are bundled with Forgejo):
 
 | runner | label required | needs |

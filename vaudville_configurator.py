@@ -1955,7 +1955,8 @@ def free_port(host: str = "127.0.0.1") -> int:
 # --------------------------------------------------------------------------- #
 # self-test
 # --------------------------------------------------------------------------- #
-def selftest(game_dir: Path | None, live: bool, verbose: bool = True) -> int:
+def selftest(game_dir: Path | None, live: bool, verbose: bool = True,
+             ci: bool = False) -> int:
     results: list[tuple[bool, str]] = []
 
     def check(ok: bool, msg: str):
@@ -2038,39 +2039,48 @@ def selftest(game_dir: Path | None, live: bool, verbose: bool = True) -> int:
     for p, src in found:
         check(True, f"found {p}  ({src})")
     if not found:
-        check(False, "no Vaudeville install found")
+        if ci:
+            check(True, "no Vaudeville install here — "
+                          "CI mode skips the game-dependent sections")
+        else:
+            check(False, "no Vaudeville install found")
     gd = game_dir or (found[0][0] if found else None)
     if gd is None:
-        print("== cannot continue without a game directory ==")
-        return 1
+        if not ci:
+            print("== cannot continue without a game directory ==")
+            return 1
 
-    print(f"[3] component scan of {gd}")
-    t0 = time.time()
-    res = scan_game(gd)
-    check(len(res.llm) == 1, f"exactly one LLMUnity.LLM component ({len(res.llm)})")
-    check(len(res.agents) > 0, f"{len(res.agents)} LLMUnity.LLMAgent components")
-    check(all(b.leftover >= 0 for b in res.blobs), "all blobs decoded without over-read")
-    if res.llm:
-        m = res.llm[0].values["model"]
-        check(m.lower().endswith(".gguf"), f"LLM.model = {m!r}")
-        check(res.llm[0].values["contextSize"] > 0, f"contextSize={res.llm[0].values['contextSize']}")
-    if res.agents:
-        a = res.agents[0].values
-        check(0.0 <= a["temperature"] <= 2.0, f"temperature={a['temperature']}")
-        check(a["host"] != "", f"host={a['host']!r} port={a['port']}")
-        check(a["slot"] in (-1, -2) or a["slot"] >= 0, f"slot={a['slot']}")
-    print(f"      scan time {time.time()-t0:.1f}s; {res.summary()}")
+    if gd is None:
+        print("[3] skipped (CI mode: no game install on this runner)")
+        print("[4] skipped (CI mode: no game install on this runner)")
+    if gd is not None:
+        print(f"[3] component scan of {gd}")
+        t0 = time.time()
+        res = scan_game(gd)
+        check(len(res.llm) == 1, f"exactly one LLMUnity.LLM component ({len(res.llm)})")
+        check(len(res.agents) > 0, f"{len(res.agents)} LLMUnity.LLMAgent components")
+        check(all(b.leftover >= 0 for b in res.blobs), "all blobs decoded without over-read")
+        if res.llm:
+            m = res.llm[0].values["model"]
+            check(m.lower().endswith(".gguf"), f"LLM.model = {m!r}")
+            check(res.llm[0].values["contextSize"] > 0, f"contextSize={res.llm[0].values['contextSize']}")
+        if res.agents:
+            a = res.agents[0].values
+            check(0.0 <= a["temperature"] <= 2.0, f"temperature={a['temperature']}")
+            check(a["host"] != "", f"host={a['host']!r} port={a['port']}")
+            check(a["slot"] in (-1, -2) or a["slot"] >= 0, f"slot={a['slot']}")
+        print(f"      scan time {time.time()-t0:.1f}s; {res.summary()}")
 
-    print("[4] dry-run change set (no writes)")
-    cfg = {"mode": "shim", "shim_port": 13333, "backend_url": "http://127.0.0.1:9999/v1",
-           "backend_model": "test-model", "api_key": "", "expose_server": False}
-    ag, llm, notes = build_change_set(cfg, res, {"temperature": 0.77, "numPredict": 123})
-    edits, warnings = plan_edits(res, ag, llm)
-    check(len(edits) == len(res.agents) * 3 or len(edits) > 0,
-          f"{len(edits)} byte edits planned for {len(res.agents)} agents")
-    check(all(len(e.new) == len(e.old) for e in edits), "every edit is size-preserving")
-    for w in warnings:
-        check(False, f"planning warning: {w}")
+        print("[4] dry-run change set (no writes)")
+        cfg = {"mode": "shim", "shim_port": 13333, "backend_url": "http://127.0.0.1:9999/v1",
+               "backend_model": "test-model", "api_key": "", "expose_server": False}
+        ag, llm, notes = build_change_set(cfg, res, {"temperature": 0.77, "numPredict": 123})
+        edits, warnings = plan_edits(res, ag, llm)
+        check(len(edits) == len(res.agents) * 3 or len(edits) > 0,
+              f"{len(edits)} byte edits planned for {len(res.agents)} agents")
+        check(all(len(e.new) == len(e.old) for e in edits), "every edit is size-preserving")
+        for w in warnings:
+            check(False, f"planning warning: {w}")
 
     print("[5] shim protocol (in-process)")
     counter: dict = {"calls": 0}
@@ -2157,7 +2167,9 @@ def selftest(game_dir: Path | None, live: bool, verbose: bool = True) -> int:
             pass
         mock2.shutdown(); mock2.server_close()
 
-    if live:
+    if live and gd is None:
+        print("[7] skipped (CI mode: no game install on this runner)")
+    if live and gd is not None:
         print("[7] native proof: game's own libllamalib -> shim -> mock backend")
         lib = find_native_lib(gd)
         if lib is None:
@@ -3278,6 +3290,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--prompt", help="prompt for --cli shim-test")
     p.add_argument("--selftest", action="store_true", help="run the built-in verification suite")
     p.add_argument("--live", action="store_true", help="selftest: also drive the game's libllamalib")
+    p.add_argument("--ci", action="store_true",
+                   help="selftest: runners without a game install skip the game-dependent sections")
     p.add_argument("--shim", action="store_true", help="internal: run the embedded shim")
     p.add_argument("--config", help="internal: shim config JSON path")
     p.add_argument("--mock-backend", action="store_true", help="internal: run the mock OpenAI backend")
@@ -3308,7 +3322,7 @@ def main(argv=None) -> int:
         return 0
     if args.selftest:
         gd = Path(args.game_dir).expanduser() if args.game_dir else None
-        return selftest(gd, live=args.live, verbose=True)
+        return selftest(gd, live=args.live, verbose=True, ci=args.ci)
     if args.cli:
         return cli(args)
     try:
