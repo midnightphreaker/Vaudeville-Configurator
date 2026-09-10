@@ -746,31 +746,19 @@ Assets: `Vaudville-Configurator.v<ver>-linux-amd64.tar.gz` and
 `Vaudville-Configurator.v<ver>-windows-x86_64.zip` (binary + README + VERSION inside).
 A `retry` reuses the release of the *same* commit and refuses tags owned by other commits.
 
-Jobs run wherever the matching label lives. `build-windows` probes its runner
-(`uname`): on a real Windows host it builds the `.exe`; if the label is served by a
-Linux runner (PyInstaller cannot cross-compile) it either packages the interpreted
-source as `…-windows-x86_64-source.zip` when the repository variable
-`ALLOW_WINDOWS_SOURCE_FALLBACK` is `true` (output family F3), or fails with
-instructions. Checks use `--selftest --ci`, which skips the game-dependent sections
-on runners that have no Vaudeville install.
+Only a **Linux runner** (label `linux-amd64`) is required: the Windows `.exe` is
+cross-built in the `build-windows` job container `cheaterman/pyinstaller-windows:latest`
+(Wine + Python 3.10.11 + PyInstaller 5.10.1 + the tcl/tk MSI, so tkinter is inside the
+exe), and the finished exe is smoke-tested under Wine (`--version`, `--cli detect`)
+before it is uploaded. Research note: the classic `cdrx/pyinstaller-windows` image has
+been frozen since 2020-01-14 (Docker Hub); the Cheaterman fork is maintained (pushed
+2025-03) and is what the workflow pins. Checks use `--selftest --ci`, which skips the
+game-dependent sections on runners with no Vaudeville install.
 
-The workflow needs **two runners** (none are bundled with Forgejo):
-
-| runner | label required | needs |
-|---|---|---|
-| Linux box | `ubuntu-latest` | python3, internet for pip; Xvfb optional |
-| Windows box/VM | `windows-latest` | python.org Python, git |
-
-Register them (token via env or stdin, never in history):
-
-```bash
-VLM_RUNNER_TOKEN=*** bash tools/register_runner.sh linux     # on the Linux box
-VLM_RUNNER_TOKEN=*** bash tools/register_runner.sh windows   # on the Windows box
-```
-
-The token comes from *repo Settings → Actions → Runners → Register new runner*.
-Queued runs (including the first-release run for the current version) start by
-themselves as soon as both runners are online.
+If you later register a real Windows runner (`tools/register_runner.sh windows`,
+token from *repo Settings → Actions → Runners*), switch `build-windows` back to
+`runs-on: windows-x86_64` and drop the `container:` key — the native Windows steps
+are still in git history.
 
 ---
 

@@ -156,77 +156,47 @@ jobs:
   build-windows:
     needs: gate
     if: needs.gate.outputs.publish == 'true'
-    runs-on: windows-x86_64
+    runs-on: linux-amd64
+    container: cheaterman/pyinstaller-windows:latest
     steps:
-      - uses: actions/checkout@v4
-      - name: probe runner environment
-        id: probe
-        shell: bash
+      - name: install curl (missing from the image)
         run: |
-          os="$(uname -s 2>/dev/null || echo unknown)"
-          case "$os" in
-            MINGW*|MSYS*|CYGWIN*|Windows*) real=true ;;
-            *) real=false ;;
-          esac
-          echo "uname=$os real_windows=$real wine=$(command -v wine64 wine 2>/dev/null | head -n1 || true)"
-          echo "real_windows=$real" >> "$GITHUB_OUTPUT"
+          apt-get update -qq >/dev/null 2>&1 || true
+          apt-get install -y -qq --no-install-recommends curl ca-certificates >/dev/null 2>&1
+      - name: checkout
+        env:
+          TOKEN: ${{ secrets.AUTH_TOKEN || secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          host="${{ github.server_url }}"; host="${host#https://}"
+          git clone --depth 50 "https://x-access-token:$TOKEN@$host/${{ github.repository }}.git" src
+          cd src && git checkout --force "${{ github.sha }}"
       - name: apply version bump to build inputs
         if: needs.gate.outputs.bump == 'true'
-        shell: bash
+        working-directory: src
+        run: python tools/bump_version.py "${{ needs.gate.outputs.version }}"
+      - name: build single-file exe (PyInstaller under Wine)
+        working-directory: src
         run: |
-          if command -v python3 >/dev/null 2>&1; then python3 tools/bump_version.py "${{ needs.gate.outputs.version }}"
-          else python tools/bump_version.py "${{ needs.gate.outputs.version }}"; fi
-      - name: checks
-        shell: bash
+          set -euo pipefail
+          pyinstaller --onefile --clean --name VaudvilleConfigurator vaudville_configurator.py
+          ls -la dist/VaudvilleConfigurator.exe
+      - name: smoke-test the exe under Wine
+        working-directory: src
         run: |
-          if command -v python3 >/dev/null 2>&1; then python3 vaudville_configurator.py --selftest --ci
-          else python vaudville_configurator.py --selftest --ci; fi
-      - name: build single-file exe (real Windows only)
-        if: steps.probe.outputs.real_windows == 'true'
-        shell: bash
-        run: |
-          if command -v py >/dev/null 2>&1; then PY="py -3"; else PY="python"; fi
-          if [ ! -x .venv-build/Scripts/pyinstaller.exe ]; then
-            $PY -m venv .venv-build
-            .venv-build/Scripts/python -m pip install --upgrade pip
-            .venv-build/Scripts/python -m pip install pyinstaller
-          fi
-          .venv-build/Scripts/pyinstaller --onefile --clean --name VaudvilleConfigurator vaudville_configurator.py
-      - name: package exe
-        if: steps.probe.outputs.real_windows == 'true'
-        shell: bash
-        run: |
-          v="${{ needs.gate.outputs.version }}"
-          echo "NAME=${REPO_NAME}.v${v}-windows-x86_64.zip" >> "$GITHUB_ENV"
-          if command -v python3 >/dev/null 2>&1; then PY=python3; else PY=python; fi
-          $PY -m zipfile -c "${REPO_NAME}.v${v}-windows-x86_64.zip" dist/VaudvilleConfigurator.exe README.md VERSION
-      - name: packaged-source fallback (no real Windows runner)
-        if: steps.probe.outputs.real_windows == 'false' && vars.ALLOW_WINDOWS_SOURCE_FALLBACK == 'true'
-        shell: bash
-        run: |
-          v="${{ needs.gate.outputs.version }}"
-          echo "NAME=${REPO_NAME}.v${v}-windows-x86_64-source.zip" >> "$GITHUB_ENV"
-          echo "### no real Windows runner on this label: packaging interpreted source (output family F3)"
-          if command -v python3 >/dev/null 2>&1; then PY=python3; else PY=python; fi
-          $PY -m zipfile -c "${REPO_NAME}.v${v}-windows-x86_64-source.zip" vaudville_configurator.py VERSION README.md tools tests
-      - name: refuse without a real Windows runner
-        if: steps.probe.outputs.real_windows == 'false' && vars.ALLOW_WINDOWS_SOURCE_FALLBACK != 'true'
-        shell: bash
-        run: |
-          echo "ERROR: the windows-x86_64 label was served by a Linux runner ($(uname -s))." >&2
-          echo "PyInstaller cannot cross-compile a Windows exe on Linux. Either register" >&2
-          echo "act_runner on a Windows host (VLM_RUNNER_TOKEN=*** tools/register_runner.sh windows)" >&2
-          echo "and remove the windows-* labels from the Linux runners, or set the repository" >&2
-          echo "variable ALLOW_WINDOWS_SOURCE_FALLBACK=true to publish the F3 packaged-source" >&2
-          echo "zip for Windows until a real Windows runner exists." >&2
-          exit 1
-      - name: upload to the release
+          set -euo pipefail
+          wine dist/VaudvilleConfigurator.exe --version
+          wine dist/VaudvilleConfigurator.exe --cli detect
+      - name: package and upload to the release
+        working-directory: src
         env:
           TOKEN: ${{ secrets.AUTH_TOKEN || secrets.GITHUB_TOKEN }}
           RELEASE_ID: ${{ needs.gate.outputs.release_id }}
-        shell: bash
         run: |
           set -euo pipefail
+          v="${{ needs.gate.outputs.version }}"
+          NAME="${REPO_NAME}.v${v}-windows-x86_64.zip"
+          python -m zipfile -c "$NAME" dist/VaudvilleConfigurator.exe README.md VERSION
           curl -sf -H "Authorization: token $TOKEN" -F "attachment=@${NAME};filename=${NAME}" \
                "${{ github.server_url }}/api/v1/repos/${{ github.repository }}/releases/${RELEASE_ID}/assets" >/dev/null
           echo "### uploaded $NAME to release $RELEASE_ID"
