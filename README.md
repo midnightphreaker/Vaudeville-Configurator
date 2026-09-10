@@ -747,12 +747,14 @@ Assets: `Vaudville-Configurator.v<ver>-linux-amd64.tar.gz` and
 A `retry` reuses the release of the *same* commit and refuses tags owned by other commits.
 
 Only a **Linux runner** (label `linux-amd64`) is required: the Windows `.exe` is
-cross-built in the `build-windows` job container `cheaterman/pyinstaller-windows:latest`
-(Wine + Python 3.10.11 + PyInstaller 5.10.1 + the tcl/tk MSI, so tkinter is inside the
-exe), and the finished exe is smoke-tested under Wine (`--version`, `--cli detect`)
-before it is uploaded. Research note: the classic `cdrx/pyinstaller-windows` image has
-been frozen since 2020-01-14 (Docker Hub); the Cheaterman fork is maintained (pushed
-2025-03) and is what the workflow pins. Checks use `--selftest --ci`, which skips the
+cross-built in the `build-windows` job container
+`ddemuro/pyinstaller:py3-win64-3.14.6-6.20.0` (Wine + Windows Python 3.14.6 +
+PyInstaller 6.20.0 + the tcl/tk MSI, so tkinter is inside the exe), and the finished
+exe is smoke-tested under Wine before upload: `--version` plus `--gui-check` on Xvfb,
+which proves the bundled tkinter works. Research notes (Docker Hub): the classic
+`cdrx/pyinstaller-windows` has been frozen since 2020-01-14; `minidocks/pyinstaller`
+is maintained but Linux-target only (no Wine/Windows tags); `ddemuro/pyinstaller`
+(source pushed 2026-09) is the maintained cdrx successor with win64 tags. Checks use `--selftest --ci`, which skips the
 game-dependent sections on runners with no Vaudeville install.
 
 If you later register a real Windows runner (`tools/register_runner.sh windows`,

@@ -157,7 +157,7 @@ jobs:
     needs: gate
     if: needs.gate.outputs.publish == 'true'
     runs-on: linux-amd64
-    container: cheaterman/pyinstaller-windows:latest
+    container: ddemuro/pyinstaller:py3-win64-3.14.6-6.20.0
     steps:
       - name: install curl (missing from the image)
         run: |
@@ -181,12 +181,16 @@ jobs:
           set -euo pipefail
           pyinstaller --onefile --clean --name VaudvilleConfigurator vaudville_configurator.py
           ls -la dist/VaudvilleConfigurator.exe
-      - name: smoke-test the exe under Wine
+      - name: smoke-test the exe under Wine (incl. tkinter/GUI)
         working-directory: src
         run: |
           set -euo pipefail
           wine dist/VaudvilleConfigurator.exe --version
-          wine dist/VaudvilleConfigurator.exe --cli detect
+          Xvfb :9 -screen 0 1024x768x24 >/dev/null 2>&1 &
+          XPID=$!
+          sleep 2
+          DISPLAY=:9 wine dist/VaudvilleConfigurator.exe --gui-check
+          kill "$XPID" 2>/dev/null || true
       - name: package and upload to the release
         working-directory: src
         env:
