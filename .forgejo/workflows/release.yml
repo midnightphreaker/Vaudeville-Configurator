@@ -25,6 +25,7 @@ jobs:
       publish: ${{ steps.calc.outputs.publish }}
       bump: ${{ steps.calc.outputs.bump }}
       notes: ${{ steps.calc.outputs.notes }}
+      release_id: ${{ steps.rel.outputs.release_id }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -62,6 +63,45 @@ jobs:
             echo "notes=$(printf '%s' "$notes" | base64 -w 0)"
           } >> "$GITHUB_OUTPUT"
           echo "### version=$new publish=$publish bump=$bump choice=$choice prev=${prev:-none}"
+      - id: rel
+        if: steps.calc.outputs.publish == 'true'
+        env:
+          TOKEN: ${{ secrets.AUTH_TOKEN || secrets.GITHUB_TOKEN }}
+          VER: ${{ steps.calc.outputs.version }}
+          NOTES_B64: ${{ steps.calc.outputs.notes }}
+        run: |
+          set -euo pipefail
+          api="${{ github.server_url }}/api/v1"
+          repo="${{ github.repository }}"
+          auth="Authorization: token $TOKEN"
+          tag="v$VER"
+          host="${{ github.server_url }}"; host="${host#https://}"
+          ls_out="$(git ls-remote "https://x-access-token:$TOKEN@$host/$repo.git" "refs/tags/$tag" || true)"
+          tag_sha="${ls_out%%$'\t'*}"
+          rel="$(curl -sf -H "$auth" "$api/repos/$repo/releases/tags/$tag" || true)"
+          if [ -n "$rel" ]; then
+            id="$(printf '%s' "$rel" | python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])')"
+            if [ -n "$tag_sha" ] && [ "$tag_sha" != "${{ github.sha }}" ]; then
+              echo "tag $tag belongs to $tag_sha, not ${{ github.sha }}; refusing to overwrite" >&2
+              exit 1
+            fi
+            echo "### reusing existing release $id for tag $tag (retry): clearing its assets"
+            printf '%s' "$rel" | python3 -c '
+          import json, sys
+          for a in json.load(sys.stdin)["assets"]:
+              print(a["id"])
+          ' | while read -r aid; do
+              curl -sf -X DELETE -H "$auth" "$api/repos/$repo/releases/$id/assets/$aid" >/dev/null || true
+            done
+          else
+            notes="$(printf '%s' "$NOTES_B64" | base64 -d)"
+            body="$(printf '%s\n' "$notes" | sed 's/^/* /')"
+            payload="$(python3 -c 'import json,sys; t,s,n,b=sys.argv[1:5]; print(json.dumps({"tag_name":t,"target_commitish":s,"name":n,"body":b}))' "$tag" "${{ github.sha }}" "${REPO_NAME} v$VER" "$body")"
+            rel="$(curl -sf -X POST -H "$auth" -H 'Content-Type: application/json' -d "$payload" "$api/repos/$repo/releases")"
+            id="$(printf '%s' "$rel" | python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])')"
+            echo "### created release $id for tag $tag"
+          fi
+          echo "release_id=$id" >> "$GITHUB_OUTPUT"
 
   build-linux:
     needs: gate
@@ -96,18 +136,21 @@ jobs:
           fi
       - name: build single-file binary
         run: bash tools/build_package.sh
-      - name: package
+      - name: package and upload to the release
+        env:
+          TOKEN: ${{ secrets.AUTH_TOKEN || secrets.GITHUB_TOKEN }}
+          RELEASE_ID: ${{ needs.gate.outputs.release_id }}
         run: |
           set -euo pipefail
           v="${{ needs.gate.outputs.version }}"
+          name="${REPO_NAME}.v${v}-linux-amd64.tar.gz"
           mkdir -p pkg
           cp dist/vaudville-configurator README.md VERSION pkg/
-          tar czf "${REPO_NAME}.v${v}-linux-amd64.tar.gz" -C pkg .
-          sha256sum "${REPO_NAME}.v${v}-linux-amd64.tar.gz"
-      - uses: actions/upload-artifact@v4
-        with:
-          name: linux-amd64
-          path: "${{ env.REPO_NAME }}.*-linux-amd64.tar.gz"
+          tar czf "$name" -C pkg .
+          sha256sum "$name"
+          curl -sf -H "Authorization: token $TOKEN" -F "attachment=@${name};filename=${name}" \
+               "${{ github.server_url }}/api/v1/repos/${{ github.repository }}/releases/${RELEASE_ID}/assets" >/dev/null
+          echo "### uploaded $name to release $RELEASE_ID"
 
   build-windows:
     needs: gate
@@ -153,98 +196,68 @@ jobs:
         shell: bash
         run: |
           v="${{ needs.gate.outputs.version }}"
-          name="${REPO_NAME}.v${v}-windows-x86_64.zip"
+          echo "NAME=${REPO_NAME}.v${v}-windows-x86_64.zip" >> "$GITHUB_ENV"
           if command -v python3 >/dev/null 2>&1; then PY=python3; else PY=python; fi
-          $PY -m zipfile -c "$name" dist/VaudvilleConfigurator.exe README.md VERSION
-          ls -la "$name"
+          $PY -m zipfile -c "${REPO_NAME}.v${v}-windows-x86_64.zip" dist/VaudvilleConfigurator.exe README.md VERSION
       - name: packaged-source fallback (no real Windows runner)
         if: steps.probe.outputs.real_windows == 'false' && vars.ALLOW_WINDOWS_SOURCE_FALLBACK == 'true'
         shell: bash
         run: |
           v="${{ needs.gate.outputs.version }}"
-          name="${REPO_NAME}.v${v}-windows-x86_64-source.zip"
+          echo "NAME=${REPO_NAME}.v${v}-windows-x86_64-source.zip" >> "$GITHUB_ENV"
           echo "### no real Windows runner on this label: packaging interpreted source (output family F3)"
           if command -v python3 >/dev/null 2>&1; then PY=python3; else PY=python; fi
-          $PY -m zipfile -c "$name" vaudville_configurator.py VERSION README.md tools tests
-          ls -la "$name"
+          $PY -m zipfile -c "${REPO_NAME}.v${v}-windows-x86_64-source.zip" vaudville_configurator.py VERSION README.md tools tests
       - name: refuse without a real Windows runner
         if: steps.probe.outputs.real_windows == 'false' && vars.ALLOW_WINDOWS_SOURCE_FALLBACK != 'true'
         shell: bash
         run: |
           echo "ERROR: the windows-x86_64 label was served by a Linux runner ($(uname -s))." >&2
           echo "PyInstaller cannot cross-compile a Windows exe on Linux. Either register" >&2
-          echo "act_runner on a Windows host (VLM_RUNNER_TOKEN=... tools/register_runner.sh windows)" >&2
+          echo "act_runner on a Windows host (VLM_RUNNER_TOKEN=*** tools/register_runner.sh windows)" >&2
           echo "and remove the windows-* labels from the Linux runners, or set the repository" >&2
           echo "variable ALLOW_WINDOWS_SOURCE_FALLBACK=true to publish the F3 packaged-source" >&2
           echo "zip for Windows until a real Windows runner exists." >&2
           exit 1
-      - uses: actions/upload-artifact@v4
-        with:
-          name: windows-x86_64
-          path: "${{ env.REPO_NAME }}.*-windows-x86_64*.zip"
+      - name: upload to the release
+        env:
+          TOKEN: ${{ secrets.AUTH_TOKEN || secrets.GITHUB_TOKEN }}
+          RELEASE_ID: ${{ needs.gate.outputs.release_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -sf -H "Authorization: token $TOKEN" -F "attachment=@${NAME};filename=${NAME}" \
+               "${{ github.server_url }}/api/v1/repos/${{ github.repository }}/releases/${RELEASE_ID}/assets" >/dev/null
+          echo "### uploaded $NAME to release $RELEASE_ID"
 
   publish:
     needs: [gate, build-linux, build-windows]
     if: needs.gate.outputs.publish == 'true'
     runs-on: linux-amd64
+    env:
+      TOKEN: ${{ secrets.AUTH_TOKEN || secrets.GITHUB_TOKEN }}
+      RELEASE_ID: ${{ needs.gate.outputs.release_id }}
     steps:
-      - uses: actions/download-artifact@v4
-        with:
-          path: artifacts
-          merge-multiple: true
-      - name: create release and upload assets
-        env:
-          TOKEN: ${{ secrets.AUTH_TOKEN || secrets.GITHUB_TOKEN }}
-          VER: ${{ needs.gate.outputs.version }}
-          NOTES_B64: ${{ needs.gate.outputs.notes }}
+      - name: verify the published release
         run: |
           set -euo pipefail
           api="${{ github.server_url }}/api/v1"
           repo="${{ github.repository }}"
-          auth="Authorization: token $TOKEN"
-          tag="v$VER"
-          ls -la artifacts
-          host="${{ github.server_url }}"; host="${host#https://}"
-          tag_sha="$(git ls-remote "https://x-access-token:$TOKEN@$host/$repo.git" "refs/tags/$tag" | cut -f1 || true)"
-          j() { python3 -c 'import json,sys; print(json.load(sys.stdin)$1)'; }
-          rel="$(curl -sf -H "$auth" "$api/repos/$repo/releases/tags/$tag" || true)"
-          if [ -n "$rel" ]; then
-            id="$(printf '%s' "$rel" | j "['id']")"
-            if [ -n "$tag_sha" ] && [ "$tag_sha" != "${{ github.sha }}" ]; then
-              echo "tag $tag belongs to $tag_sha, not ${{ github.sha }}; refusing to overwrite" >&2
-              exit 1
-            fi
-            echo "### reusing existing release $id for tag $tag (retry)"
-            for f in artifacts/*; do
-              n="$(basename "$f")"
-              aid="$(printf '%s' "$rel" | python3 -c 'import json,sys; n=sys.argv[1]; print(next((a["id"] for a in json.load(sys.stdin)["assets"] if a["name"]==n), ""))' "$n")"
-              if [ -n "$aid" ]; then
-                curl -sf -X DELETE -H "$auth" "$api/repos/$repo/releases/$id/assets/$aid" >/dev/null
-              fi
-            done
-          else
-            notes="$(printf '%s' "$NOTES_B64" | base64 -d)"
-            body="$(printf '%s\n' "$notes" | sed 's/^/* /')"
-            payload="$(python3 -c 'import json,sys; t,s,n,b=sys.argv[1:5]; print(json.dumps({"tag_name":t,"target_commitish":s,"name":n,"body":b}))' "$tag" "${{ github.sha }}" "${REPO_NAME} v$VER" "$body")"
-            rel="$(curl -sf -X POST -H "$auth" -H 'Content-Type: application/json' -d "$payload" "$api/repos/$repo/releases")"
-            id="$(printf '%s' "$rel" | j "['id']")"
-          fi
-          for f in artifacts/*; do
-            n="$(basename "$f")"
-            curl -sf -H "$auth" -F "attachment=@$f;filename=$n" "$api/repos/$repo/releases/$id/assets" >/dev/null
-            echo "### uploaded $n"
-          done
-          rel="$(curl -sf -H "$auth" "$api/repos/$repo/releases/$id")"
+          rel="$(curl -sf -H "Authorization: token $TOKEN" "$api/repos/$repo/releases/${RELEASE_ID}")"
           printf '%s' "$rel" | python3 -c '
           import json, sys
           d = json.load(sys.stdin)
-          print("release:", d["tag_name"], d["name"])
+          print("release:", d["id"], d["tag_name"], "-", d["name"])
+          names = []
           for a in d["assets"]:
               print("  asset:", a["name"], a["size"], "bytes")
-          if len(d["assets"]) < 2:
-              sys.exit("expected >=2 assets on the release")
+              names.append(a["name"])
+          need = ("-linux-amd64.tar.gz", "-windows-x86_64")
+          if len(names) < 2 or not any(n.endswith(need[0]) for n in names) \
+             or not any(need[1] in n for n in names):
+              sys.exit(f"release assets incomplete: {names}")
+          print("### release verified:", d["html_url"])
           '
-          echo "### release published: $api/repos/$repo/releases/$id"
 
   bump-commit:
     needs: [gate, publish]
@@ -264,8 +277,7 @@ jobs:
           git config user.name "Vaudville Release Bot"
           git config user.email "killbot-prime@phrk.org"
           git add VERSION vaudville_configurator.py
-          msg="chore(release): bump version to $VER"
-          msg="$msg
+          msg="chore(release): bump version to $VER
 
           - VERSION and APP_VERSION synchronised after the v$VER release published.
 
