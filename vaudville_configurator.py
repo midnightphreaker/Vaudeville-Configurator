@@ -2012,6 +2012,10 @@ def selftest(game_dir: Path | None, live: bool, verbose: bool = True) -> int:
         IS_WINDOWS = real_win
     check(wk == {} or set(wk) == {"creationflags"}, f"windows detach kwargs: {wk}")
     check(isinstance(wd, list), f"windows steam-dir probe safe off-windows: {wd}")
+    vfile = Path(__file__).resolve().parent / "VERSION"
+    if vfile.is_file() and not getattr(sys, "frozen", False):
+        check(vfile.read_text().strip() == APP_VERSION,
+              f"VERSION file ({vfile.read_text().strip()}) matches APP_VERSION ({APP_VERSION})")
 
     print("[1] ThinkStripper")
     cases = [(["<think>secret</think>Hi there!"], "Hi there!"),

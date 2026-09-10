@@ -1,0 +1,217 @@
+name: release
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      version_choice:
+        description: "Bump applied to build inputs before checks (Major = middle+1 & reset last, minor = last+1, retry = keep)"
+        type: choice
+        default: retry
+        options: [Major, minor, retry]
+
+permissions:
+  contents: write
+
+env:
+  REPO_NAME: Vaudville-Configurator
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.calc.outputs.version }}
+      publish: ${{ steps.calc.outputs.publish }}
+      bump: ${{ steps.calc.outputs.bump }}
+      notes: ${{ steps.calc.outputs.notes }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: calc
+        env:
+          EVENT: ${{ github.event_name }}
+          CHOICE: ${{ github.event.inputs.version_choice }}
+        run: |
+          set -euo pipefail
+          cur="$(cat VERSION)"
+          IFS=. read -r a b c <<< "$cur"
+          choice="$CHOICE"
+          [ "$EVENT" = "workflow_dispatch" ] || choice=retry
+          case "$choice" in
+            Major) new="$a.$((b + 1)).0"; bump=true ;;
+            minor) new="$a.$b.$((c + 1))"; bump=true ;;
+            retry) new="$cur";          bump=false ;;
+            *) echo "unknown version_choice: $choice" >&2; exit 2 ;;
+          esac
+          if [ "$EVENT" = "push" ]; then
+            # automatic publication only when the application version changed
+            if git rev-parse -q --verify "refs/tags/v$new" >/dev/null; then publish=false; else publish=true; fi
+          else
+            publish=true
+          fi
+          prev="$(git tag -l 'v*' | sort -V | tail -n 1 || true)"
+          if [ -n "$prev" ]; then notes="$(git log --pretty=%s -n 10 "$prev..HEAD")"
+          else notes="$(git log --pretty=%s -n 10)"; fi
+          [ -n "$notes" ] || notes="no changes since previous release"
+          {
+            echo "version=$new"
+            echo "publish=$publish"
+            echo "bump=$bump"
+            echo "notes=$(printf '%s' "$notes" | base64 -w 0)"
+          } >> "$GITHUB_OUTPUT"
+          echo "### version=$new publish=$publish bump=$bump choice=$choice prev=${prev:-none}"
+
+  build-linux:
+    needs: gate
+    if: needs.gate.outputs.publish == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: apply version bump to build inputs
+        if: needs.gate.outputs.bump == 'true'
+        run: python3 tools/bump_version.py "${{ needs.gate.outputs.version }}"
+      - name: checks
+        run: |
+          set -euo pipefail
+          python3 vaudville_configurator.py --selftest
+          bash -n tests/run_e2e_test.sh tests/run_direct_llama_test.sh \
+                  tests/run_real_backend_test.sh tools/build_package.sh
+          if command -v Xvfb >/dev/null 2>&1; then
+            Xvfb :99 -screen 0 1400x1000x24 -nolisten tcp & XPID=$!
+            sleep 1
+            DISPLAY=:99 python3 vaudville_configurator.py --gui-check
+            kill "$XPID"
+          else
+            echo "### Xvfb unavailable; skipping --gui-check"
+          fi
+      - name: build single-file binary
+        run: bash tools/build_package.sh
+      - name: package
+        run: |
+          set -euo pipefail
+          v="${{ needs.gate.outputs.version }}"
+          mkdir -p pkg
+          cp dist/vaudville-configurator README.md VERSION pkg/
+          tar czf "${REPO_NAME}.v${v}-linux-amd64.tar.gz" -C pkg .
+          sha256sum "${REPO_NAME}.v${v}-linux-amd64.tar.gz"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-amd64
+          path: "${{ env.REPO_NAME }}.*-linux-amd64.tar.gz"
+
+  build-windows:
+    needs: gate
+    if: needs.gate.outputs.publish == 'true'
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: apply version bump to build inputs
+        if: needs.gate.outputs.bump == 'true'
+        run: python tools/bump_version.py "${{ needs.gate.outputs.version }}"
+      - name: checks
+        run: python vaudville_configurator.py --selftest
+      - name: build single-file exe
+        run: tools\build_package.cmd
+      - name: package
+        shell: pwsh
+        run: |
+          $v = "${{ needs.gate.outputs.version }}"
+          $name = "${{ env.REPO_NAME }}.v$v-windows-x86_64.zip"
+          New-Item -ItemType Directory -Force pkg | Out-Null
+          Copy-Item dist\VaudvilleConfigurator.exe, README.md, VERSION pkg\
+          Compress-Archive -Path pkg\* -DestinationPath $name
+          Get-FileHash $name | Format-List
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-x86_64
+          path: "${{ env.REPO_NAME }}.*-windows-x86_64.zip"
+
+  publish:
+    needs: [gate, build-linux, build-windows]
+    if: needs.gate.outputs.publish == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+      - name: create release and upload assets
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VER: ${{ needs.gate.outputs.version }}
+          NOTES_B64: ${{ needs.gate.outputs.notes }}
+        run: |
+          set -euo pipefail
+          api="${{ github.server_url }}/api/v1"
+          repo="${{ github.repository }}"
+          auth="Authorization: token $TOKEN"
+          tag="v$VER"
+          ls -la artifacts
+          remote="https://x-access-token:$TOKEN@${{ github.server_url }}"; remote="${remote#https://}"
+          tag_sha="$(git ls-remote "https://$remote/$repo.git" "refs/tags/$tag" | cut -f1 || true)"
+          rel="$(curl -sf -H "$auth" "$api/repos/$repo/releases/tags/$tag" || true)"
+          if [ -n "$rel" ]; then
+            id="$(jq -r .id <<<"$rel")"
+            if [ -n "$tag_sha" ] && [ "$tag_sha" != "${{ github.sha }}" ]; then
+              echo "tag $tag belongs to $tag_sha, not ${{ github.sha }}; refusing to overwrite" >&2
+              exit 1
+            fi
+            echo "### reusing existing release $id for tag $tag (retry)"
+            for f in artifacts/*; do
+              n="$(basename "$f")"
+              aid="$(jq -r --arg n "$n" '.assets[] | select(.name==$n) | .id' <<<"$rel")"
+              if [ -n "$aid" ] && [ "$aid" != "null" ]; then
+                curl -sf -X DELETE -H "$auth" "$api/repos/$repo/releases/$id/assets/$aid" >/dev/null
+              fi
+            done
+          else
+            notes="$(printf '%s' "$NOTES_B64" | base64 -d)"
+            body=""
+            while IFS= read -r l; do body+="* $l"$'\n'; done <<<"$notes"
+            rel="$(curl -sf -X POST -H "$auth" -H 'Content-Type: application/json' \
+                   -d "$(jq -n --arg t "$tag" --arg s "${{ github.sha }}" \
+                            --arg n "${REPO_NAME} v$VER" --arg b "$body" \
+                        '{tag_name:$t, target_commitish:$s, name:$n, body:$b}')" \
+                   "$api/repos/$repo/releases")"
+            id="$(jq -r .id <<<"$rel")"
+          fi
+          for f in artifacts/*; do
+            n="$(basename "$f")"
+            curl -sf -H "$auth" -F "attachment=@$f;filename=$n" \
+                 "$api/repos/$repo/releases/$id/assets" >/dev/null
+            echo "### uploaded $n"
+          done
+          rel="$(curl -sf -H "$auth" "$api/repos/$repo/releases/$id")"
+          jq -r '.tag_name, (.assets[] | "\(.name)  \(.size) bytes")' <<<"$rel"
+          [ "$(jq '.assets | length' <<<"$rel")" -ge 2 ] || { echo "missing assets" >&2; exit 1; }
+
+  bump-commit:
+    needs: [gate, publish]
+    if: needs.gate.outputs.bump == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: commit version bump after successful publication
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VER: ${{ needs.gate.outputs.version }}
+        run: |
+          set -euo pipefail
+          python3 tools/bump_version.py "$VER"
+          git config user.name "Vaudville Release Bot"
+          git config user.email "killbot-prime@phrk.org"
+          git add VERSION vaudville_configurator.py
+          msg="chore(release): bump version to $VER"
+          msg="$msg
+
+          - VERSION and APP_VERSION synchronised after the v$VER release published.
+
+          ~ Midnight Phreaker ~ <midnightphreaker@gmail.com>"
+          git commit -m "$msg"
+          host="${{ github.server_url }}"; host="${host#https://}"
+          git push "https://x-access-token:$TOKEN@$host/${{ github.repository }}.git" \
+              HEAD:refs/heads/main

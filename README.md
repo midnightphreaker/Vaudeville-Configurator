@@ -8,9 +8,14 @@ optional test/proxy tools. No pip installs, no UnityPy, no game recompilation.
 
 ```bash
 vaudville-configurator            # GUI   (symlink in ~/.local/bin)
-vaudville-configurator --selftest # 44 built-in checks, incl. the game's own native lib
+vaudville-configurator --selftest # 51 built-in checks, incl. the game's own native lib
 vaudeville-llm                    # old alias, same program
 ```
+
+Source & prebuilt single-file binaries: <https://git.phrk.org/pub/Vaudville-Configurator>.
+Releases (Linux binary + Windows exe archives) are published automatically by
+`.forgejo/workflows/release.yml` whenever the version in `VERSION` changes, or manually
+via *Actions → release → Run workflow* with a `Major` / `minor` / `retry` choice.
 
 The tool offers **three modes**:
 
