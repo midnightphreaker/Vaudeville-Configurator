@@ -109,12 +109,21 @@ jobs:
     runs-on: linux-amd64
     steps:
       - uses: actions/checkout@v4
+      - name: prepare build container (libpython + tkinter for PyInstaller/GUI)
+        run: |
+          if command -v apt-get >/dev/null 2>&1; then
+            ver="$(python3 -c 'import sys; print(f"{sys.version_info[0]}.{sys.version_info[1]}")')"
+            apt-get update -qq >/dev/null 2>&1 || true
+            apt-get install -y -qq "libpython${ver}" "python3-tk" >/dev/null 2>&1 \
+              || echo "### apt could not install libpython${ver}/python3-tk; continuing anyway"
+          fi
       - name: apply version bump to build inputs
         if: needs.gate.outputs.bump == 'true'
         run: python3 tools/bump_version.py "${{ needs.gate.outputs.version }}"
       - name: checks
         run: |
           set -euo pipefail
+          python3 -c "import tkinter; print('tkinter OK')"
           python3 vaudville_configurator.py --selftest --ci
           bash -n tests/run_e2e_test.sh tests/run_direct_llama_test.sh \
                   tests/run_real_backend_test.sh tools/build_package.sh
@@ -125,14 +134,6 @@ jobs:
             kill "$XPID"
           else
             echo "### Xvfb unavailable; skipping --gui-check"
-          fi
-      - name: ensure libpython shared library (Debian system python)
-        run: |
-          if command -v apt-get >/dev/null 2>&1; then
-            ver="$(python3 -c 'import sys; print(f"{sys.version_info[0]}.{sys.version_info[1]}")')"
-            apt-get update -qq >/dev/null 2>&1 || true
-            apt-get install -y -qq "libpython${ver}" >/dev/null 2>&1 \
-              || echo "### apt could not install libpython${ver}; continuing anyway"
           fi
       - name: build single-file binary
         run: bash tools/build_package.sh
