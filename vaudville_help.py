@@ -140,7 +140,7 @@ SETTING_HELP: dict[str, dict] = {
         "tips": [
             ("either", "the game plays exactly the same"),
             ("if a value seems ignored", "check the mode, not this switch"),
-            ("curiosity", "satisfy it here, then move along"),
+            ("curious?", "it changes nothing, but look if you like"),
         ],
     },
     "remote": {
@@ -169,7 +169,7 @@ SETTING_HELP: dict[str, dict] = {
     },
     "APIKey": {
         "what": "A password the game could hand to a server to prove it is allowed in.",
-        "does": "Sent with each request as a bearer token. Both sides ship empty, and an empty slot cannot be made longer, so the real key lives in the translator instead.",
+        "does": "Sent with each request to prove the game is allowed in. Both sides ship empty, and an empty slot cannot be made longer, so the real key lives in the translator instead.",
         "why_change": "You do not, in practice: this box has room for zero characters.",
         "why_not": "A key typed here will not fit. Put it in the translator's API key field, which has no length limit and never shows the key on a command line.",
         "range": "text, but only as long as the space already reserved - shipped empty, so empty is the only value that fits",
@@ -338,7 +338,7 @@ SETTING_HELP: dict[str, dict] = {
         "what": "A nudge towards new topics instead of ones already mentioned.",
         "does": "Penalises any word that has appeared at all, however long ago, so conversation drifts to fresh ground. 0 is off.",
         "why_change": "Your server honours it and the cast keeps circling the same subject.",
-        "why_not": "Not every backend pays attention to it, and the shipped 0 is neutral.",
+        "why_not": "Not every server pays attention to it, and the shipped 0 is neutral.",
         "range": "-4.0 to 4.0 here (the engine's own slider stops at 1.0); ships at 0 (off)",
         "tips": [
             ("0", "off - the shipped, neutral setting"),
@@ -351,7 +351,7 @@ SETTING_HELP: dict[str, dict] = {
         "what": "A nudge based on how often a word has already been used.",
         "does": "The more a word appears the less likely it becomes - a running tally against repetition. 0 is off.",
         "why_change": "Your server honours it and one word keeps turning up in every line.",
-        "why_not": "It ships off, and the translator can only pass it on if the backend listens.",
+        "why_not": "It ships off, and the translator can only pass it on if the server listens.",
         "range": "-4.0 to 4.0 here (the engine's own slider stops at 1.0); ships at 0 (off)",
         "tips": [
             ("0", "off - as shipped"),
@@ -479,8 +479,8 @@ SETTING_HELP: dict[str, dict] = {
     "slot": {
         "what": "Which seat at the server's table this character uses.",
         "does": "A server can hold several conversations at once, one per seat, and the seat decides what gets cached. -1 means 'pick a free seat for me'.",
-        "why_change": "Never, really - automatic is right for the game, and remote characters are forced to -1 anyway.",
-        "why_not": "A fixed seat can collide with another character and mix up who remembers what. The game also rewrites this at runtime.",
+        "why_change": "Never, really - automatic is right for the game, and remote characters get a seat assigned for them anyway.",
+        "why_not": "A fixed seat can collide with another character and mix up who remembers what. The game also rewrites this when it loads.",
         "range": "-1 (automatic) up to 4096; ships at -1",
         "tips": [
             ("-1", "automatic; leave it"),
@@ -493,8 +493,8 @@ SETTING_HELP: dict[str, dict] = {
         "what": "The character's backstage note: who they are and how they should behave.",
         "does": "Sent ahead of every line, so it shapes the whole performance. The game overwrites it at load time from its own character text files or from a Workshop story.",
         "why_change": "You do not, from here - your text is replaced on the next load, and it must be 153-156 characters to fit the slot.",
-        "why_not": "Edits get overwritten, and anything longer or shorter will not fit the reserved space.",
-        "range": "text of 153 to 156 characters (the size of the shipped note); rewritten by the game at runtime",
+        "why_not": "Edits get overwritten, and anything longer or shorter will not fit the reserved space. Two of the cast ship an empty note, where only empty fits.",
+        "range": "text of 153 to 156 characters (the size of the shipped note); rewritten by the game when it loads",
         "tips": [
             ("as shipped", "each character arrives with their own note"),
             ("your edit", "gets overwritten the next time the game loads"),
@@ -621,14 +621,14 @@ SETTING_HELP: dict[str, dict] = {
     },
     "reasoning": {
         "what": "Lets a 'thinking' model mutter its working-out before it answers.",
-        "does": "On = the model thinks out loud; the tool hides the thinking from the dialogue (the translator strips think blocks). Off = it just answers.",
+        "does": "On = the model thinks out loud before answering; Off = it just answers. This is the game's own engine switch, so it belongs to the local modes - in Remote mode the translator's 'strip think' does the hiding.",
         "why_change": "Your model file is a reasoning model (Qwen3, DeepSeek-R1 style) and you want the better answers it gives.",
         "why_not": "On an ordinary model it does nothing, and without stripping the voice actors will read the working-out aloud.",
         "range": "on or off (1 / 0); ships off",
         "tips": [
-            ("on", "the model thinks out loud; the tool hides the thinking"),
+            ("on", "the model thinks out loud before it answers"),
             ("off", "plain models, plain answers"),
-            ("keep 'strip think' on", "or the cast narrates its own homework"),
+            ("in Remote mode", "the translator's 'strip think' hides the working-out"),
             ("non-reasoning model", "leave it off"),
         ],
     },
@@ -684,24 +684,24 @@ SETTING_HELP: dict[str, dict] = {
         "what": "How many numbers are in each of those numeric summaries, for a model that makes them.",
         "does": "Nothing for Vaudeville: it stays 0 because the model is a talker, not a number-cruncher.",
         "why_change": "Never.",
-        "why_not": "It only describes an embedding model, and this is not one.",
+        "why_not": "It only describes a number-crunching model, and this is not one.",
         "range": "0 upward (to about 262000); ships at 0",
         "tips": [
-            ("0", "as shipped - not an embedding model"),
+            ("0", "as shipped - not a number-crunching model"),
             ("any other number", "only meaningful for number-crunching models"),
             ("for playing", "not a dial you need"),
         ],
     },
     "minContextLength": {
         "what": "A read-out: the smallest conversation memory the loaded model supports.",
-        "does": "Nothing - it is a note the engine writes back from the model file, not a control.",
-        "why_change": "Never; it is informational and gets refreshed when a model loads.",
-        "why_not": "Editing a read-out does not change the model, and your edit is replaced.",
+        "does": "Nothing - it is the floor the engine reports for the loaded model, not a control.",
+        "why_change": "Never; it is informational, and the engine does not even write it back here.",
+        "why_not": "Editing a read-out does not change the model, so there is nothing to gain.",
         "range": "whole numbers, reported by the model; not a control (ships 0)",
         "tips": [
             ("informational", "the model's own floor, reported to you"),
             ("your real dial", "contextSize"),
-            ("edits here", "get overwritten at load time"),
+            ("edits here", "change nothing - it is only a read-out"),
         ],
     },
     "maxContextLength": {
@@ -733,13 +733,13 @@ _MODEL_HELP_CORE: dict[str, str] = {
         "Same link swap, smaller brain: choose something tiny and quick (around half a billion "
         "parameters) or the handheld will crawl."),
     "basic": (
-        "Basic mode keeps the game's own built-in engine, which only understands the "
-        "Llama-3-8B-Instruct family. Your file must be that model or something made from it - not "
-        "3.1 or later. Otherwise use Advanced or Remote mode."),
+        "Basic mode keeps the game's own built-in engine and the model file in the game's own "
+        "folder. Stay in it for the Llama-3-8B-Instruct family: your file must be that model or "
+        "something made from it - not 3.1 or later. Anything else wants Advanced or Remote mode."),
     "direct": (
-        "Advanced mode swaps in the latest llama.cpp engine, so almost any recent GGUF works - as "
-        "long as it fits in your graphics card's memory beside the game. Compressed files "
-        "(Q4_K_M) are how most people make them fit."),
+        "Advanced mode keeps the game's own engine but points the cast at a llama.cpp server you "
+        "run yourself, so almost any recent model file works - loaded by that server, not by the "
+        "game. Compressed files (Q4_K_M) are how most people make a big model fit."),
     "shim": (
         "Remote mode does not use a local model file at all: the AI lives on the server you point "
         "the translator at. The game's own model file stays untouched, and the model name you type "
@@ -799,9 +799,9 @@ _SHIM_HELP_CORE: dict[str, str] = {
         "means this computer only. The game's host box fits 9-12 characters, so keep it "
         "'localhost' - the translator holds the real address."),
     "chat vs raw": (
-        "How the translator talks to your service. 'chat' uses the normal chat endpoint and keeps "
-        "who-is-speaking intact - right for nearly everything. 'raw' sends one flat block of text, "
-        "for services with no chat endpoint."),
+        "How the translator talks to your service. 'chat' uses the normal chat web address and "
+        "keeps who-is-speaking intact - right for nearly everything. 'raw' sends one flat block of "
+        "text, for services with no chat address of their own."),
     "strip think": (
         "Removes the model's think-blocks before they reach the dialogue box and the voice actors. "
         "Keep it on for reasoning models (Qwen3, DeepSeek-R1 style) or the cast will read their "
@@ -811,7 +811,7 @@ _SHIM_HELP_CORE: dict[str, str] = {
         "only for a self-signed certificate on your own network; anywhere else, fix the "
         "certificate instead."),
     "start/stop/test shim": (
-        "Start launches the translator in the background (its log sits in the tool's data folder), "
+        "Start launches the translator in the background (its log sits in the tool's own folder), "
         "Stop closes it, and Test completion makes one real request through to your service. "
         "Start it before every Remote-mode session."),
     "expose-game-as-server": (
