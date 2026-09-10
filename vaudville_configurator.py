@@ -90,7 +90,7 @@ from pathlib import Path
 
 APP_NAME = "Vaudville Configurator"
 APP_SLUG = "vaudville-configurator"
-APP_VERSION = "1.3.2"
+APP_VERSION = "1.3.3"
 STEAM_APPID = "2240920"
 GAME_DIR_NAME = "Vaudeville"
 DATA_DIR = "Vaudeville_Data"
