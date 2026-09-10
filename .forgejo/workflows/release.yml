@@ -19,7 +19,7 @@ env:
 
 jobs:
   gate:
-    runs-on: ubuntu-latest
+    runs-on: linux-amd64
     outputs:
       version: ${{ steps.calc.outputs.version }}
       publish: ${{ steps.calc.outputs.publish }}
@@ -66,7 +66,7 @@ jobs:
   build-linux:
     needs: gate
     if: needs.gate.outputs.publish == 'true'
-    runs-on: ubuntu-latest
+    runs-on: linux-amd64
     steps:
       - uses: actions/checkout@v4
       - name: apply version bump to build inputs
@@ -104,7 +104,7 @@ jobs:
   build-windows:
     needs: gate
     if: needs.gate.outputs.publish == 'true'
-    runs-on: windows-latest
+    runs-on: windows-x86_64
     steps:
       - uses: actions/checkout@v4
       - name: apply version bump to build inputs
@@ -131,7 +131,7 @@ jobs:
   publish:
     needs: [gate, build-linux, build-windows]
     if: needs.gate.outputs.publish == 'true'
-    runs-on: ubuntu-latest
+    runs-on: linux-amd64
     steps:
       - uses: actions/download-artifact@v4
         with:
@@ -139,7 +139,7 @@ jobs:
           merge-multiple: true
       - name: create release and upload assets
         env:
-          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TOKEN: ${{ secrets.AUTH_TOKEN || secrets.GITHUB_TOKEN }}
           VER: ${{ needs.gate.outputs.version }}
           NOTES_B64: ${{ needs.gate.outputs.notes }}
         run: |
@@ -190,14 +190,14 @@ jobs:
   bump-commit:
     needs: [gate, publish]
     if: needs.gate.outputs.bump == 'true'
-    runs-on: ubuntu-latest
+    runs-on: linux-amd64
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
       - name: commit version bump after successful publication
         env:
-          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TOKEN: ${{ secrets.AUTH_TOKEN || secrets.GITHUB_TOKEN }}
           VER: ${{ needs.gate.outputs.version }}
         run: |
           set -euo pipefail
