@@ -14,8 +14,10 @@ VENV="${VENV:-.venv-build}"          # build-only venv; never touches system pyt
 # Pure-python data modules the GUI depends on.  Declared explicitly so the
 # bundle is correct however vaudville_configurator.py imports them: top level,
 # inside a "try: ... except ImportError:" fallback, or lazily inside a
-# function.  Keep in sync with vaudville-configurator.spec,
-# tools/build_package.cmd and .forgejo/workflows/release.yml.
+# function.  The generated vaudville-configurator.spec is NOT a sync peer
+# (pyinstaller regenerates it on every build); the three entry points - this
+# script, tools/build_package.cmd and the release workflow - are the source of
+# truth and must carry the same list.
 EXTRA_MODULES="${EXTRA_MODULES:-vaudville_cast vaudville_help}"
 
 if [ ! -x "$VENV/bin/pyinstaller" ]; then
@@ -47,14 +49,15 @@ done
 listing="$("$VENV/bin/python" -m PyInstaller.utils.cliutils.archive_viewer \
              -l -r -b "dist/$NAME" 2>/dev/null || true)"
 if [ -z "$listing" ]; then
-  echo "### WARNING: archive_viewer gave no output; cannot verify bundle contents" >&2
+  echo "### ERROR: archive_viewer gave no output; cannot verify bundle contents" >&2
+  exit 1
 else
   for m in $EXTRA_MODULES; do
     if [ ! -f "$m.py" ]; then
       echo "### note: $m.py not in this checkout; skipping its bundle assertion"
       continue
     fi
-    if printf '%s\n' "$listing" | grep -qE "^[[:space:]]*$m\$"; then
+    if grep -qE "^[[:space:]]*$m\$" <<<"$listing"; then
       echo "### bundle contains $m"
     else
       echo "### ERROR: $m is missing from dist/$NAME" >&2

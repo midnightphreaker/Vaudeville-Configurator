@@ -183,8 +183,8 @@ jobs:
           # Pure-python data modules the GUI depends on.  Declared explicitly so
           # the bundle is correct however vaudville_configurator.py imports them
           # (top level, inside a "try: ... except ImportError:" fallback, or
-          # lazily inside a function).  Keep in sync with tools/build_package.sh,
-          # tools/build_package.cmd and vaudville-configurator.spec.
+          # lazily inside a function).  The generated .spec is not a sync peer;
+          # tools/build_package.sh and tools/build_package.cmd carry the same list.
           extra_modules="vaudville_cast vaudville_help"
           hidden=()
           for m in $extra_modules; do hidden+=(--hidden-import "$m"); done
@@ -202,7 +202,7 @@ jobs:
             for m in $extra_modules; do
               if [ ! -f "$m.py" ]; then
                 echo "### note: $m.py not in this checkout; skipping its bundle assertion"
-              elif printf '%s\n' "$listing" | grep -qE "^[[:space:]]*$m\$"; then
+              elif grep -qE "^[[:space:]]*$m\$" <<<"$listing"; then
                 echo "### bundle contains $m"
               else
                 echo "### ERROR: $m is missing from dist/VaudvilleConfigurator.exe" >&2
