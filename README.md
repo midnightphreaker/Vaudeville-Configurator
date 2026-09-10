@@ -8,9 +8,21 @@ optional test/proxy tools. No pip installs, no UnityPy, no game recompilation.
 
 ```bash
 vaudville-configurator            # GUI   (symlink in ~/.local/bin)
-vaudville-configurator --selftest # 41 built-in checks, incl. the game's own native lib
+vaudville-configurator --selftest # 44 built-in checks, incl. the game's own native lib
 vaudeville-llm                    # old alias, same program
 ```
+
+The tool offers **three modes**:
+
+| mode | what it means in one line |
+|---|---|
+| **Local Mode - Basic** | the untouched game: the bundled LlamaLib runs your GGUF in-process; you only tune models, sampling and GPU layers |
+| **Local Mode - Advanced** | the game connects straight to a llama.cpp-protocol server *you* run (e.g. `llama-server`), no shim in between |
+| **Remote Mode - OpenAI API Compatible Endpoint** | the game talks to the built-in shim, which translates to any OpenAI-compatible BaseURL (vLLM, Ollama, LM Studio, OpenAI, OpenRouter, TGI, …) |
+
+Jump to: [modes](#2-the-three-modes) · [interface tour](#4-the-interface-page-by-page) ·
+[quickstarts](#5-quickstart-guides) · [how it works](#6-how-it-works) ·
+[safety](#8-safety-model) · [troubleshooting](#10-troubleshooting)
 
 ---
 
@@ -50,16 +62,80 @@ at runtime — which is exactly why patching the serialized fields works.
 
 ---
 
-## 2. Files in this directory
+## 2. The three modes
+
+### 2.1 Local Mode - Basic  (internal key `off`, CLI `--mode basic`)
+
+Nothing networked. The game's bundled LlamaLib loads the GGUF that is linked as
+`Meta-Llama-3-8B-Instruct-Q4_K_M.gguf` (or the Steam-Deck fallback) and runs it in-process.
+What you can still control: which GGUF each slot points at (Models tab), every sampling
+parameter (Parameters tab), and the GPU-layer count.
+
+* **Change to this when:** you want the stock experience, you have no other inference stack,
+  or you are troubleshooting ("does the problem exist without my changes?").
+* **Do not expect:** remote endpoints, API keys, or a different context window than the
+  local engine's `contextSize`.
+
+### 2.2 Local Mode - Advanced  (internal key `direct`, CLI `--mode advanced`)
+
+The 26 `LLMAgent` components get `remote = true` and point at `host:port` of a server that
+speaks the **llama.cpp-server protocol** (`/health`, `/apply-template`, `/completion`,
+`/tokenize`, …). That is what `llama-server` (any recent llama.cpp build), another LlamaLib,
+or the game itself in server mode speak. No shim, no translation, no extra process.
+
+Hard limits inherited from in-place patching (see [6.3](#63-in-place-patching)):
+
+* the host string must stay **9–12 characters** (`127.0.0.1` ✓, `localhost` ✓, `gpu-box.local` ✗)
+* **no path prefix** — the library appends `/completion` etc. itself, so `/v1` is impossible
+* **no TLS** — `https://` would need 8 extra bytes in the host field
+
+* **Change to this when:** you run your own `llama-server` (newer llama.cpp, Vulkan/CUDA
+  build, another machine on the LAN with a short hostname) and want zero extra hops.
+* **Do not use when:** your endpoint is an OpenAI-style `/v1/chat/completions` API, needs a
+  path, a long hostname, HTTPS, or an API key longer than 0 bytes → use the Remote mode.
+
+### 2.3 Remote Mode - OpenAI API Compatible Endpoint  (internal key `shim`, CLI `--mode remote`)
+
+The agents get `remote = true` but keep `host = localhost` and `port = <shim port>`. The
+built-in shim (a ~600-line stdlib HTTP server embedded in this program) accepts the
+llama.cpp-server protocol and forwards to **any OpenAI-compatible BaseURL** as
+`/v1/chat/completions` (or `/v1/completions` in *raw* mode), translating streaming back into
+llama.cpp SSE. It holds the arbitrary BaseURL, model name and API key, and can do TLS for you.
+
+* **Change to this when:** vLLM, Ollama, LM Studio, OpenAI, OpenRouter, TGI, koboldcpp —
+  anything OpenAI-compatible, local or remote.
+* **Do not forget:** the shim must be running whenever the game is (Start shim button, or
+  `--cli shim-start`); and keep a small GGUF linked as the main model because the boot screen
+  waits for the local engine ([6.5](#65-the-loading-gate)).
+
+---
+
+## 3. Install & run
+
+Requirements: Python ≥ 3.10 with `tkinter` (Arch: `sudo pacman -S tk`), nothing else.
+Screenshots in this README are regenerated with `tools/make_screenshots.sh`, which needs
+`xorg-server-xvfb` and `imagemagick`.
+
+```bash
+cd ~/Workspace/Vaudville-Configurator
+ln -sfn "$PWD/vaudville_configurator.py" ~/.local/bin/vaudville-configurator
+vaudville-configurator                       # GUI
+vaudville-configurator --cli detect          # headless sanity check
+vaudville-configurator --selftest --live     # full verification, incl. the game's native lib
+```
+
+### Files
 
 ```
 Vaudville-Configurator/
 ├── vaudville_configurator.py     the program (GUI + embedded shim + patcher + CLI + self-test)
 ├── README.md                     this document
+├── docs/screenshots/             the images used below (regenerate with tools/make_screenshots.sh)
 ├── tools/
 │   ├── llamalib_shim.py          standalone copy of the translation shim
 │   ├── poc_remote_llamalib.py    ctypes PoC: drives the game's own libllamalib in remote mode
 │   ├── mock_openai_backend.py    fake OpenAI-compatible backend used by the tests
+│   ├── make_screenshots.sh       headless (Xvfb) regeneration of docs/screenshots/
 │   └── llama.cpp -> …            symlink to a downloaded llama.cpp release (for the tests)
 └── tests/
     ├── run_e2e_test.sh           mock backend + shim + PoC (MODE=chat|raw), no llama.cpp needed
@@ -91,40 +167,14 @@ ln -sfn "$PWD/vaudville_configurator.py" ~/.local/bin/vaudeville-llm     # legac
 
 Do **not** put any of these inside the game's `Vaudeville_Data/` tree (Steam verifies it).
 
-## 3. Quick start
-
-### GUI
-
-```bash
-vaudville-configurator
-```
-
-Tabs:
-
-1. **Game** — detected install, build-guid, component counts, live "game is running" warning
-   (writes are blocked while it runs), and a summary of how the stack fits together.
-2. **Models** — the build hard-codes two GGUF *filenames*; this tab repoints them at any GGUF
-   you like (symlink swap; a shipped real file is first moved to
-   `StreamingAssets/gguf/ORIGINAL_<name>`, never deleted; swap is atomic).
-3. **Remote endpoint** — mode (`local only` / `via built-in shim` / `direct llama.cpp server`),
-   BaseURL, model name, API key (masked, "show", optional save, **Load from Bitwarden…** via
-   `bw`), shim listen host/port, chat/raw, `strip <think>`, skip-TLS-verify,
-   **Start / Stop / Test completion / Show shim log**, and the reverse switch that turns the
-   game itself into an OpenAI-compatible HTTP server.
-4. **Parameters** — every serialized field for the 26 agents and the 1 LLM component, each
-   annotated `[sent to remote]` / `[local only]`. Blank = leave unchanged.
-   Buttons: *Load current values*, *Clear*, *Game defaults*, *Preview changes*, *Apply*.
-5. **Backup / restore** — every backup with its edit labels; restore selected or latest with
-   sha256 verification.
-
-### Headless
+### Headless CLI
 
 ```bash
 vaudville-configurator --cli detect
 vaudville-configurator --cli list [--show-prompts]
 vaudville-configurator --cli models
 vaudville-configurator --cli set-model --slot primary|deck --model /path/to/Model.gguf [--dry-run]
-vaudville-configurator --cli plan  --mode shim --backend-url http://127.0.0.1:8000/v1 \
+vaudville-configurator --cli plan  --mode remote --backend-url http://127.0.0.1:8000/v1 \
                                    --backend-model Qwen3-32B \
                                    --set temperature=0.9 --set numPredict=256
 vaudville-configurator --cli apply  …same flags… --yes     # writes, with a verified backup
@@ -134,20 +184,326 @@ vaudville-configurator --cli shim-start | shim-status | shim-test | shim-stop
 vaudville-configurator --selftest [--live]
 ```
 
-Useful flags: `--game-dir PATH` (override detection), `--rescan`, `--api-key-env VAR`
-(read the key from the environment), `--llm-set NAME=VALUE` (LLM-component fields),
-`--expose-server --server-port N`, `--tab NAME` / `--quit-after N` (screenshot/testing).
+`--mode` accepts the new names and the old keys interchangeably:
+`basic|off`, `advanced|direct`, `remote|shim` (plus `local`, `local-basic`, `local-advanced`,
+`openai`, `remote-openai`, …). Useful flags: `--game-dir PATH`, `--rescan`,
+`--api-key-env VAR` (read the key from the environment), `--llm-set NAME=VALUE`,
+`--expose-server --server-port N`, `--tab NAME`, `--geometry WxH`, `--quit-after N`.
 
 ---
 
-## 4. How it works
+## 4. The interface, page by page
 
-### 4.1 Detection
+Every screenshot below is a real capture of the program (regenerate them with
+`tools/make_screenshots.sh`; they run under Xvfb and never touch your config).
+
+### 4.1 Game tab — where the game is and what was found
+
+![Game tab](docs/screenshots/tab-game.png)
+
+| control | what it is / does | plays with | change it when | leave it alone when |
+|---|---|---|---|---|
+| **Game folder** + *Browse…* | the Vaudeville install every action targets | detection below | you keep a second copy (modding sandbox, Steam Deck transfer) | the auto-detected Steam install is correct |
+| *Detect* | re-runs Steam detection: `libraryfolders.vdf` → `appmanifest_2240920.acf` → `installdir`, plus `steamapps/common` scan, Flatpak Steam, `$STEAMPATH`, sibling copies | Game folder | the field is empty or points at a stale path | — |
+| *Re-scan* | decodes all 27 LLMUnity components again (≈1 s) and reloads the Parameters tab from disk | Parameters tab | after an Apply, after a Steam verify, or when values look stale | nothing changed since the last scan |
+| info block | path, build-guid, component counts, per-file summary | — | — | — |
+| red "game is running" label | live `/proc/*/exe` poll; **all writes are blocked while it runs** | Apply buttons | — | never ignore it: patching a running game corrupts the session |
+| "How it works" panel | the stack summary from section 1 | — | — | — |
+
+### 4.2 Models tab — which GGUF the build loads
+
+![Models tab](docs/screenshots/tab-models.png)
+
+The build hard-codes two *filenames* inside `StreamingAssets`. This tab repoints each one.
+
+| control | what it is / does | plays with | change it when | leave it alone when |
+|---|---|---|---|---|
+| **Main dialogue model** combo + *Browse…* + *Apply* | atomic symlink swap of `Meta-Llama-3-8B-Instruct-Q4_K_M.gguf`; a shipped real file is first moved to `StreamingAssets/gguf/ORIGINAL_…`, never deleted | loading gate (6.5), Parameters `contextSize` | you have a better local GGUF (same or smaller context, chat-tuned) | in Remote/Advanced mode keep the **small** Qwen3-0.6B here — the boot screen waits for it |
+| **Steam Deck / fallback model** combo | same for `Qwen3-0.6B-Q4_K_M.gguf` (chosen automatically on Deck by `OffWorldInit.Awake`) | — | you want a different fallback | on desktop it is only used as the loading-gate model in remote modes |
+| *Refresh* | re-lists `StreamingAssets/gguf/**/*.gguf` + `StreamingAssets/*.gguf` | library folder | after dropping a new GGUF in the library | — |
+| *Open library folder* | creates `<StreamingAssets>/gguf/` if needed and opens it in your file manager | Refresh | you are adding models | — |
+| library line | shows the library path and how many GGUFs are visible | — | — | — |
+
+Notes: the swap is a symlink, so Steam's verify-integrity restores the original file and your
+GGUF stays in the library. Model *names* longer than the in-place string budget are fine here
+because the symlink keeps the shipped filename.
+
+### 4.3 Remote endpoint tab — the mode switch and everything networked
+
+This is the page the three modes live on; the screenshots show each mode selected.
+
+**Local Mode - Basic**
+
+![Remote tab, Local Mode - Basic](docs/screenshots/tab-remote-basic.png)
+
+**Local Mode - Advanced**
+
+![Remote tab, Local Mode - Advanced](docs/screenshots/tab-remote-advanced.png)
+
+**Remote Mode - OpenAI API Compatible Endpoint**
+
+![Remote tab, Remote Mode](docs/screenshots/tab-remote-openai.png)
+
+| control | what it is / does | plays with | change it when | leave it alone when |
+|---|---|---|---|---|
+| **Mode** radios | the three modes of section 2; writes `LLMAgent.remote` (+ `host`/`port`) on Apply | everything on this page | see 2.1–2.3 | Basic is the safe default |
+| **BaseURL** | OpenAI-compatible endpoint the **shim** forwards to, e.g. `http://127.0.0.1:8000/v1`, `http://127.0.0.1:11434/v1`, `https://api.openai.com/v1`. In Advanced mode it is parsed as `host[:port]` only | shim Mode, Model name, API key | Remote mode: always set it. Advanced mode: host must be 9–12 chars, no path, no https | Basic mode ignores it entirely |
+| **Model name** | the `model` field sent to the backend (vLLM served name, Ollama tag, `gpt-4o-mini`, …) | BaseURL | Remote mode: whenever the backend expects a specific id | Basic/Advanced: LlamaLib does not send a model name |
+| **API key** | sent as `Authorization: Bearer …` by the shim; passed to the shim through the **environment**, never argv | Save/Show/Bitwarden | your endpoint requires auth | leave empty for local unauthenticated servers |
+| *Save API key in config* | persists the key in `~/.config/…/config.json` (chmod 600) | API key | the machine is yours and disk encryption is on | shared machines — use `--api-key-env` or Bitwarden instead |
+| *Show key* | unmasks the field | — | verifying a paste | screenshots/sharing your screen |
+| *Load from Bitwarden…* | `bw list items --search llm`, pick an item, take its password/hidden field into the field (never logged) | API key | you keep keys in Bitwarden | — |
+| **Listen / Port** (shim) | where the shim binds; the agents are patched to `localhost:<port>` | game's own server port | 13333 collides with something | the default is what the game's stock `port` already is |
+| **Mode** (chat/raw) | shim translation: *chat* → `/v1/chat/completions` with roles preserved; *raw* → `/v1/completions` with the templated prompt | BaseURL | backend has no chat endpoint, or you want the game's template applied server-side | chat is right for 99 % of backends |
+| *Strip `<think>` blocks* | removes reasoning blocks (handles tags split across chunks) before they reach dialogue/TTS | reasoning models | keep **on** for Qwen3/DeepSeek-R1 style models | your model never emits `<think>` |
+| *Skip TLS verify* | disables certificate checks in the shim's HTTPS client | https BaseURLs | self-signed homelab cert | anything else — fix the cert instead |
+| *Start / Stop shim* | launches/stops the embedded shim as a background process (`shim.pid`, log in state dir) | Test completion | before every game session in Remote mode | Basic/Advanced modes need no shim |
+| *Test completion* | one real `/completion` round-trip through the shim → backend | shim, BaseURL | after any backend change, before playing | — |
+| *Show shim log* | tails the shim log in a window | — | debugging | — |
+| **Reverse: expose the game's model** + **Server port** | flips `LLM.remote = true` (one byte) so the *game itself* serves its loaded model as an OpenAI-compatible server on that port | shim port (must differ) | you want other tools to use the game's model | almost always — it costs RAM and a port |
+| *Preview changes* | dry run: lists every byte edit with file+offset, plus BLOCKED/NOTE lines | Apply | always, before Apply | — |
+| *Apply to game files* | hash-verified backup → in-place byte edits → re-decode verification | Backup tab | after a satisfactory preview | while the game runs (blocked anyway) |
+| *Reset to Local Mode - Basic* | sets mode back to Basic and previews the revert | — | undoing remote experiments | — |
+| plan box | the preview output: notes, warnings, edit count | — | — | — |
+
+### 4.4 Parameters tab — every serialized field
+
+![Parameters tab](docs/screenshots/tab-parameters.png)
+
+Left column = the 26 `LLMAgent` components (all characters, edited together); right column =
+the single `LLM` component (local engine). **Blank = leave unchanged.** *Load current values*
+fills the form from the game; *Game defaults* fills LLMUnity's shipped values.
+
+#### Character agents (`LLMUnity.LLMAgent` ×26)
+
+| field | what it is / does | plays with | change it when | leave it alone when |
+|---|---|---|---|---|
+| `remote` | 0/1: talk to a server instead of the in-process engine | Mode radios (this is what they write) | only via the Mode radios, so host/port stay consistent | hand-editing it without host/port |
+| `host` | server hostname; in-place limit 9–12 chars | BaseURL, mode | Advanced mode with a short LAN hostname | Remote mode (the shim wants `localhost`) |
+| `port` | server port | shim Port / server port | your server is not on 13333 | default already matches |
+| `APIKey` | Bearer token sent by LlamaLib; shipped empty ⇒ cannot grow in place | shim API key | never (use the shim) | always |
+| `numRetries` | connection retries with 1/2/4/8/16/30 s backoff | — | flaky LAN server | default 5 is fine |
+| `numPredict` | max tokens per reply, `-1` = unlimited | backend context | you want shorter/cheaper replies | `-1` lets characters finish their lines |
+| `temperature` | randomness; 0 = deterministic | topK/topP/minP | dialogue feels canned (try 0.7–0.9) | you want reproducible Workshop-story behaviour (0.2) |
+| `topK` | keep k most likely tokens | temperature | flavour tuning | >100 rarely helps |
+| `topP` | nucleus cutoff | temperature | with temperature for variety | >1.0 is meaningless |
+| `minP` | floor relative to top probability | topP | modern llama.cpp sampling taste | 0.05 stock is sane |
+| `repeatPenalty` | 1.0 = off; punishes repeats | repeatLastN | characters loop phrases | >1.3 makes prose awkward |
+| `repeatLastN` | window for the penalty | repeatPenalty | loops persist | 64 stock |
+| `presencePenalty` / `frequencyPenalty` | OpenAI-style penalties, forwarded by the shim | — | backend honours them and you see repetition | stock 0 |
+| `typicalP` | 1.0 = off; typical sampling | — | experimenting | 1.0 |
+| `mirostat`, `mirostatTau`, `mirostatEta` | mirostat 0/1/2 sampler | temperature | you specifically want mirostat | 0 (off) is the sane default |
+| `seed` | 0 = random | — | reproducible sessions/tests | normal play |
+| `cachePrompt` | reuse the KV cache between turns | contextSize | almost never off | keep true (big speedup) |
+| `ignoreEos` | generate past end-of-text | numPredict | debugging | normal play |
+| `nProbs` | return top-N probabilities | — | debugging | 0 |
+| `slot` | server slot; remote clients are forced to `-1` (auto) | — | never | always |
+| `grammar` | GBNF/JSON schema; length-constrained in place | — | structured output experiments | normal play |
+
+#### Local engine (`LLMUnity.LLM` ×1)
+
+| field | what it is / does | plays with | change it when | leave it alone when |
+|---|---|---|---|---|
+| `model` | GGUF filename in StreamingAssets; in-place limit 33–36 chars | Models tab (preferred) | never by hand — use the symlink swap | always |
+| `contextSize` | prompt context the **local** engine allocates | RAM/VRAM, loading time | you have headroom and long scenes (8192→16384) | remote modes (the server decides) |
+| `maxContextLength` / `minContextLength` | informational, read back from the model | — | never | always |
+| `numThreads` | CPU threads, `-1` = all | — | you want cores left for the game | `-1` |
+| `numGPULayers` | GPU offload; **overridden at boot** by the in-game Options slider / `GpuLoad` preference | in-game Options | you never touch the in-game slider | you use the in-game slider (it wins) |
+| `batchSize` | prompt-processing batch | load time | very long prompts | 512 |
+| `parallelPrompts` | `-1` = auto from client count | — | debugging | `-1` |
+| `flashAttention` | FA in the local engine | contextSize, RAM | supported build + big context | stock false |
+| `reasoning` | enables the model's "thinking" mode | shim *Strip `<think>`* | your GGUF is a reasoning model and you keep stripping on | non-reasoning models |
+| `remote` + `port` + `APIKey` | the **reverse** server switch (game serves its model) | Reverse checkbox on the Remote tab | via that checkbox | by hand |
+| `dontDestroyOnLoad`, `embeddingsOnly`, `embeddingLength` | unused-by-default engine flags | — | never | always |
+
+### 4.5 Backup / restore tab
+
+![Backup tab](docs/screenshots/tab-backup.png)
+
+| control | what it is / does | change it when | leave it alone when |
+|---|---|---|---|
+| list | every backup dir with timestamp, file count, game path and the edit labels that created it | — | — |
+| *Refresh* | re-reads `~/.local/share/vaudville-configurator/backups/` | after applies from the CLI | — |
+| *Restore selected* | copies the backed-up files back byte-for-byte and re-verifies sha256 | undoing anything | the current state is what you want |
+| *Open backup folder* | file manager on the backup root | manual inspection | — |
+
+Steam's *verify integrity of game files* is the second, independent way back to stock.
+
+---
+
+## 5. Quickstart guides
+
+All three start the same way and all three end with a concrete, ready-to-play configuration.
+
+### 5.1 Quickstart — Local Mode - Basic
+
+*Goal: the stock game, but with sampling (and optionally the model) tuned to your taste.
+No extra processes, nothing networked.*
+
+1. **Run the configurator**
+   ```bash
+   vaudville-configurator
+   ```
+   The Game tab auto-detects your Steam install; wait for the scan line
+   (`27 components`) in the log box.
+2. **Game tab** — confirm the folder and the component counts (1 LLM, 26 agents).
+3. **Models tab** (optional) — pick a different GGUF for *Main dialogue model* and *Apply*.
+   Keep a chat-tuned model of ≤ 8B at Q4 for CPU play; the Steam-Deck slot can stay stock.
+4. **Remote endpoint tab** — select **Local Mode - Basic**, then *Preview changes* and confirm
+   the plan says `Local Mode - Basic: agents use the in-process llama.cpp service`.
+5. **Parameters tab** — *Load current values*, then set the values from the table below and
+   *Preview changes* → *Apply to game files* (a hash-verified backup is written first).
+6. **Play.** Launch Vaudeville from Steam as usual. Nothing else needs to run.
+
+Recommended settings (Local Mode - Basic):
+
+| setting | value | why |
+|---|---|---|
+| mode | `Local Mode - Basic` | stock inference path |
+| main model | stock `Meta-Llama-3-8B-Instruct-Q4_K_M.gguf` (or your own chat GGUF) | the build's hard-coded name |
+| `temperature` | `0.8` | stock 0.2 is very flat for improv dialogue |
+| `topP` | `0.95` | pairs well with 0.8 |
+| `minP` | `0.05` | stock |
+| `repeatPenalty` / `repeatLastN` | `1.15` / `64` | tames looping without breaking prose |
+| `numPredict` | `-1` | let characters finish |
+| `contextSize` | `8192` (or `4096` on a weak CPU) | local engine only; bigger = slower first reply |
+| `numGPULayers` | set with the **in-game Options slider** | it overrides the serialized value at boot |
+
+Ready to play (CLI equivalent of steps 4–5):
+
+```bash
+vaudville-configurator --cli apply --mode basic \
+    --set temperature=0.8 --set topP=0.95 --set minP=0.05 \
+    --set repeatPenalty=1.15 --set repeatLastN=64 --set numPredict=-1 \
+    --llm-set contextSize=8192 --yes
+# then: steam steam://rungameid/2240920
+```
+
+### 5.2 Quickstart — Local Mode - Advanced
+
+*Goal: the game drives **your own llama.cpp server** (newer llama.cpp, CUDA/Vulkan build,
+another box on the LAN) with no shim in between.*
+
+1. **Start your server** (any build that speaks the llama.cpp-server protocol):
+   ```bash
+   llama-server -m ~/models/Qwen3-8B-Instruct-Q4_K_M.gguf \
+                --host 127.0.0.1 --port 8080 -c 8192 -ngl 99 --jinja
+   ```
+   Check `curl -s http://127.0.0.1:8080/health` → `200`.
+2. **Run the configurator**
+   ```bash
+   vaudville-configurator
+   ```
+3. **Models tab** — link the **small** `Qwen3-0.6B-Q4_K_M.gguf` as *Main dialogue model*.
+   The boot screen waits for the local engine even in remote modes
+   ([6.5](#65-the-loading-gate)); the 0.6B model starts in ~1 s.
+4. **Remote endpoint tab** — select **Local Mode - Advanced** and set
+   **BaseURL** to `http://127.0.0.1:8080` (host `127.0.0.1` = 9 chars ✓, **no `/v1`**,
+   **no `https`**). *Model name* and *API key* stay empty.
+5. *Preview changes* — the plan must say
+   `Local Mode - Advanced: agents -> http://127.0.0.1:8080 directly …`.
+   If you see `BLOCKED (Local Mode - Advanced): …` notes, fix host/port or switch to
+   Remote mode. Then *Apply to game files*.
+6. **Parameters tab** — set your sampling values (they are forwarded to the server in the
+   `/completion` payload) and Apply.
+7. **Play** with the server running. Verify first if you like:
+   `bash tests/run_direct_llama_test.sh` drives the game's own library at a real server.
+
+Recommended settings (Local Mode - Advanced):
+
+| setting | value | why |
+|---|---|---|
+| mode | `Local Mode - Advanced` | zero extra hops |
+| BaseURL | `http://127.0.0.1:8080` | must be `host[:port]`, 9–12-char host, no path, no TLS |
+| main model (Models tab) | `Qwen3-0.6B-Q4_K_M.gguf` | satisfies the loading gate |
+| server `-c` | ≥ your `contextSize` wish | the **server** owns the context now |
+| `temperature` / `topP` | `0.8` / `0.95` | as above |
+| `numPredict` | `-1` | as above |
+| `cachePrompt` | `true` | big speedup between turns |
+
+Ready to play:
+
+```bash
+vaudville-configurator --cli set-model --slot primary \
+    --model ~/.local/share/Steam/steamapps/common/Vaudeville/Vaudeville_Data/StreamingAssets/Qwen3-0.6B-Q4_K_M.gguf
+vaudville-configurator --cli apply --mode advanced --backend-url http://127.0.0.1:8080 \
+    --set temperature=0.8 --set topP=0.95 --set numPredict=-1 --set cachePrompt=true --yes
+# keep `llama-server …` running, then launch the game
+```
+
+### 5.3 Quickstart — Remote Mode - OpenAI API Compatible Endpoint
+
+*Goal: any OpenAI-compatible backend — vLLM, Ollama, LM Studio, OpenAI, OpenRouter, TGI —
+local or remote, with API key and TLS if needed.*
+
+1. **Know your endpoint**, e.g.
+   | backend | BaseURL | model name |
+   |---|---|---|
+   | vLLM | `http://127.0.0.1:8000/v1` | the served id, e.g. `Qwen/Qwen3-8B` |
+   | Ollama | `http://127.0.0.1:11434/v1` | e.g. `qwen3:8b` |
+   | LM Studio | `http://127.0.0.1:1234/v1` | the loaded model id |
+   | llama.cpp server | `http://127.0.0.1:8080/v1` | anything it serves |
+   | OpenAI | `https://api.openai.com/v1` | e.g. `gpt-4o-mini` |
+   | OpenRouter | `https://openrouter.ai/api/v1` | e.g. `meta-llama/llama-3.1-70b-instruct` |
+2. **Run the configurator**
+   ```bash
+   vaudville-configurator
+   ```
+3. **Models tab** — link the **small** `Qwen3-0.6B-Q4_K_M.gguf` as *Main dialogue model*
+   (loading gate, see 5.2 step 3).
+4. **Remote endpoint tab** — select **Remote Mode - OpenAI API Compatible Endpoint**, then:
+   * **BaseURL** = your endpoint (path allowed, https allowed)
+   * **Model name** = the id from the table
+   * **API key** = paste, or *Load from Bitwarden…*; tick *Save API key* only if you want it
+     persisted (chmod 600). Prefer `--api-key-env VLM_API_KEY` on shared machines.
+   * shim **Listen/Port** = `127.0.0.1` / `13333` (default), **Mode** = `chat`,
+     **Strip `<think>` blocks** on for reasoning models.
+5. **Start shim**, then **Test completion** — you should see a one-line reply in the log box.
+   If it fails, *Show shim log* and fix BaseURL/model/key.
+6. *Preview changes* → the plan must say
+   `Remote Mode - OpenAI API Compatible Endpoint: agents -> built-in shim on localhost:13333 -> …`
+   → *Apply to game files*.
+7. **Parameters tab** — sampling values (forwarded through the shim) → Apply.
+8. **Play** with the shim running. The shim survives GUI closes (it is a background process);
+   stop it with *Stop shim* or `--cli shim-stop`. For autostart, add
+   `vaudville-configurator --cli shim-start` to your session startup.
+
+Recommended settings (Remote Mode):
+
+| setting | value | why |
+|---|---|---|
+| mode | `Remote Mode - OpenAI API Compatible Endpoint` | arbitrary BaseURL/model/key/TLS |
+| BaseURL / Model name | your endpoint / its model id | sent on every request |
+| shim Mode | `chat` | roles preserved; `raw` only for completion-only backends |
+| Strip `<think>` | on | reasoning text would otherwise be spoken by the TTS |
+| main model (Models tab) | `Qwen3-0.6B-Q4_K_M.gguf` | loading gate |
+| `temperature` / `topP` | `0.8` / `0.95` | as above |
+| `numPredict` | `256`–`512` for paid APIs, `-1` locally | cost control vs. completeness |
+
+Ready to play:
+
+```bash
+export VLM_API_KEY=…                       # or: bw get password <item>
+vaudville-configurator --cli set-model --slot primary \
+    --model ~/.local/share/Steam/steamapps/common/Vaudeville/Vaudeville_Data/StreamingAssets/Qwen3-0.6B-Q4_K_M.gguf
+vaudville-configurator --cli apply --mode remote \
+    --backend-url https://api.example.org/v1 --backend-model llama-3.1-70b-instruct \
+    --api-key-env VLM_API_KEY \
+    --set temperature=0.8 --set topP=0.95 --set numPredict=512 --yes
+vaudville-configurator --cli shim-start && vaudville-configurator --cli shim-test
+# then launch the game
+```
+
+---
+
+## 6. How it works
+
+### 6.1 Detection
 `steamapps/libraryfolders.vdf` → library roots → `appmanifest_2240920.acf` → `installdir`;
 plus `steamapps/common` scan, Flatpak Steam, `$STEAMPATH`, non-Steam copies next to the CWD,
 and the CWD itself. Verified with `Vaudeville_Data/StreamingAssets` + `app.info`.
 
-### 4.2 Component scanning (no UnityPy)
+### 6.2 Component scanning (no UnityPy)
 Each asset file is mmap'd and searched for structural anchors:
 
 * `LLMAgent`: the `host` string slot (`localhost`) and the LLMUnity default system-prompt
@@ -160,7 +516,7 @@ False positives are effectively impossible and the scan is value-tolerant (it st
 components after you have patched them). ~1.5 s for all ~7 GB of assets. Offsets are cached per
 build-guid in `asset-profile.json` and re-validated on every run.
 
-### 4.3 In-place patching
+### 6.3 In-place patching
 Unity serializes `bool` as **4 bytes**, `int32`/`float32` as 4 bytes → always patchable.
 A `string` is `int32 length + bytes + pad-to-4`; the blob size is fixed, so a string may only be
 replaced when `ceil4(len(new)) == ceil4(len(old))`. Consequences the tool explains instead of
@@ -175,7 +531,7 @@ silently corrupting:
 Before writing: hash-verified backup outside the game tree; the file is re-read and compared
 against the scan at each offset; after writing the components are re-decoded and shown.
 
-### 4.4 The shim (why "remote" needs it)
+### 6.4 The shim (why Remote mode needs it)
 In remote mode the game's native library POSTs the **llama.cpp-server** protocol, not OpenAI's:
 
 ```
@@ -203,9 +559,10 @@ mode), translating streaming back into llama.cpp SSE. Two hard-won details:
 * **Reasoning models leak `<think>…</think>`** into the dialogue box *and the TTS*.
   The shim strips them by default (`--keep-think` disables), handling tags split across chunks.
 
-A **real llama.cpp `llama-server` needs no shim** — pick *direct* mode (host length permitting).
+A **real llama.cpp `llama-server` needs no shim** — pick *Local Mode - Advanced*
+(host length permitting).
 
-### 4.5 The loading gate
+### 6.5 The loading gate
 `OffWorldInit.CheckLoading` waits for `LLM.started` (byte at `LLM+0x80`). In remote mode the
 local service is still constructed, so **keep a small GGUF linked as the main model**
 (e.g. `Qwen3-0.6B-Q4_K_M.gguf`) or the boot screen hangs. The GUI says this whenever remote
@@ -213,12 +570,12 @@ mode is planned.
 
 ---
 
-## 5. Modding routes, ranked
+## 7. Modding routes, ranked
 
 | # | route | what you get | effort |
 |---|---|---|---|
-| A | **this tool**: flip `remote` on the 26 agents + run the built-in shim | any OpenAI-compatible backend (vLLM, Ollama, LM Studio, OpenAI, TGI), arbitrary BaseURL/model/key, all sampling params | one click |
-| A′ | *direct* mode at a real `llama-server` | newer llama.cpp, another GPU box, no shim | one click |
+| A | **this tool, Remote mode**: flip `remote` on the 26 agents + run the built-in shim | any OpenAI-compatible backend (vLLM, Ollama, LM Studio, OpenAI, TGI), arbitrary BaseURL/model/key, all sampling params | one click |
+| A′ | **this tool, Advanced mode** at a real `llama-server` | newer llama.cpp, another GPU box, no shim | one click |
 | B | **BepInEx 6 IL2CPP** (`BepInEx-Unity.IL2CPP-linux-x64-*`) + a C# plugin | arbitrary host/key/strings, per-character prompts, bypass the loading gate, UI | medium |
 | C | **replace `libllamalib_linux-x64_*.so`** (Apache-2.0/MIT; full C ABI is mapped) | any inference engine behind the ABI; newer llama.cpp builds | high |
 | D | zero-patch levers | `LLMManager.json` → `"debugMode": 0` = full llama.cpp logging; `GpuLoad` preference / Options slider = GPU offload; GGUF symlink swap; per-save chat-history JSON; the in-game Story Editor + Steam Workshop for new prompts | none |
@@ -228,30 +585,32 @@ System prompts are 5–8 KB variable-length `TextAsset`s → not resizable in pl
 
 ---
 
-## 6. Safety model
+## 8. Safety model
 
 * writes are **blocked while the game process is running** (`/proc/*/exe` check, polled in the GUI)
 * every write is preceded by a **hash-verified backup** in
   `~/.local/share/vaudville-configurator/backups/<UTC>-<dirname>/` with a `manifest.json`
   (per-file sha256 before/after, edit labels); restore re-verifies
-* string fields are size-constrained (see 4.3) — the tool refuses and explains rather than
+* string fields are size-constrained (see 6.3) — the tool refuses and explains rather than
   corrupting; byte edits are re-read and compared before being written
 * the API key goes to the shim through the environment (`VLM_API_KEY`), never argv; it is only
   persisted if you tick *Save API key* (config file is chmod 600); *Load from Bitwarden…* uses
   `bw` and never logs the secret
 * Steam's *verify integrity of game files* is always a way back to stock
 * nothing is ever written inside `Vaudeville_Data/` except the two model symlinks you choose
+  (and the `gguf/` library folder that *Open library folder* creates on demand)
 
 ---
 
-## 7. Verification status
+## 9. Verification status
 
-`--selftest --live` → **41/41 checks passed** (python 3.14, this machine):
+`--selftest --live` → **44/44 checks passed** (python 3.14, this machine):
 
+* mode names/order/aliases 3/3 (the three labels, all 18 CLI/config aliases, fallbacks)
 * ThinkStripper 10/10 (split tags, multiple blocks, unterminated)
 * detection of both the Steam install and a non-Steam copy
 * scan: exactly 1 `LLMUnity.LLM` + 26 `LLMUnity.LLMAgent`, all in range
-* dry run: 78 size-preserving edits
+* dry run: size-preserving edits for all 26 agents
 * shim protocol in-process: `/health`, `/apply-template` (roles preserved), `/completion`
   non-stream and streaming (no `[DONE]`, exact reassembly), `/tokenize`, `/embeddings`;
   backend saw `Authorization: Bearer …` and the right model
@@ -261,36 +620,37 @@ System prompts are 5–8 KB variable-length `TextAsset`s → not resizable in pl
   LLMAgent_Chat` against the shim
 
 Additionally exercised for real: a 104-edit apply (`remote`, `temperature`, `topP`,
-`numPredict` on all 26 agents), re-decode, and a sha256-verified restore; and a live run of
-the shim against a real `llama-server` (b10889) serving `Qwen3-0.6B-Q4_K_M.gguf`, both directly
-and through the shim (2.8–3.3 s per reply).
+`numPredict` on all 26 agents), re-decode, and a sha256-verified restore; live runs of the
+game's library against a real `llama-server` (b10889) serving `Qwen3-0.6B-Q4_K_M.gguf`, both
+directly (Advanced mode path) and through the shim (Remote mode path); and all three
+`tests/*.sh` scripts from several working directories.
 
-The **GUI layout** was verified by screenshot for the *Game* and *Remote endpoint* tabs and
-headlessly (`--gui-check`) for all five; the *Models*, *Parameters* and *Backup* tabs were
-constructed but not visually confirmed.
+The **GUI** was verified by headless Xvfb screenshots of all five tabs (the images in
+section 4, regenerated by `tools/make_screenshots.sh`) and by `--gui-check`.
 
 ---
 
-## 8. Troubleshooting
+## 10. Troubleshooting
 
 | symptom | cause / fix |
 |---|---|
-| boot screen hangs after enabling remote | loading gate (4.5): link a small GGUF as the main model |
+| boot screen hangs after enabling Advanced/Remote | loading gate (6.5): link a small GGUF as the main model |
 | `port 13333 is already in use` | something else listens there (or the game's own server mode); change the shim port or the server port |
-| replies contain `<think>…` | shim `strip <think>` off, or direct mode with a reasoning model (use `--keep-think`/`/no_think`/a non-reasoning model) |
-| `BLOCKED (direct mode): …` notes | host too long / has a path / is https — use the shim (3.4) |
+| replies contain `<think>…` | shim *Strip `<think>`* off, or Advanced mode with a reasoning model (use a non-reasoning model or `/no_think`) |
+| `BLOCKED (Local Mode - Advanced): …` notes | host too long / has a path / is https — switch to Remote mode (2.3) |
 | no llama.cpp logs | `StreamingAssets/LLMManager.json` → `"debugMode": 0`, then read `~/.config/unity3d/Bumblebee Studios/Vaudeville/Player.log` |
 | model ignores my context size | `contextSize` applies to the **local** engine only; a remote server decides its own |
 | GPU not used | Options slider / `GpuLoad` preference overrides the serialized `numGPULayers` (default 3); the Parameters tab can set it too |
 | Steam complains about files | restore from the Backup tab, or Steam's verify-integrity |
 | shim won't start | `--cli shim-status` + `~/.local/state/vaudville-configurator/shim.log` |
+| GUI shows old mode names | an older GUI process is still running; close it and start `vaudville-configurator` again |
 
 ---
 
-## 9. Provenance & legal
+## 11. Provenance & legal
 
 * Analysis of the shipped build (IL2CPP dump, component decode, prompt extraction, protocol
-  reverse-engineering, the earlier GUI screenshots) is documented in
+  reverse-engineering) is documented in
   `/home/mp/Workspace/Vaudeville/modding/README.md` together with the analysis toolkit.
 * Upstream sources pinned for cross-reference: `undreamai/LLMUnity` v3.0.0 and
   `undreamai/LlamaLib` v2.0.0 (Apache-2.0 / MIT).

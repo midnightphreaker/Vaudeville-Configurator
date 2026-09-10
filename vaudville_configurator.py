@@ -8,6 +8,23 @@ Single file, standard library only (tkinter for the GUI). Run it from anywhere:
     vaudville-configurator --cli list       # headless
     vaudville-configurator --selftest       # built-in verification
 
+Modes
+-----
+Local Mode - Basic                             internal key: off      (CLI: --mode basic)
+    The unmodified game. The bundled LlamaLib runs your GGUF in-process; only the
+    model link, the sampling parameters and the GPU-layer count are changed.
+
+Local Mode - Advanced                          internal key: direct   (CLI: --mode advanced)
+    The game's own LlamaLib connects as a *remote client* to a llama.cpp-protocol
+    server you run yourself (llama-server, another LlamaLib, ...). No shim, so the
+    endpoint must speak /health /apply-template /completion /tokenize and must never
+    emit "data: [DONE]". The host string has to fit the 9-12 character in-place slot.
+
+Remote Mode - OpenAI API Compatible Endpoint    internal key: shim     (CLI: --mode remote)
+    The game talks to the built-in shim on localhost:13333 and the shim translates to
+    any OpenAI-compatible BaseURL (vLLM, Ollama, LM Studio, llama.cpp, OpenAI,
+    OpenRouter, TGI, koboldcpp, ...). Arbitrary BaseURL / model name / API key / TLS.
+
 What it does
 ------------
 Vaudeville's dialogue AI is undreamai/LLMUnity v3.0.0 + LlamaLib v2.0.0 (a llama.cpp
@@ -65,7 +82,7 @@ from pathlib import Path
 
 APP_NAME = "Vaudville Configurator"
 APP_SLUG = "vaudville-configurator"
-APP_VERSION = "1.1.0"
+APP_VERSION = "1.2.0"
 STEAM_APPID = "2240920"
 GAME_DIR_NAME = "Vaudeville"
 DATA_DIR = "Vaudeville_Data"
@@ -75,6 +92,47 @@ STREAMING = "StreamingAssets"
 PRIMARY_MODEL_NAME = "Meta-Llama-3-8B-Instruct-Q4_K_M.gguf"
 DECK_MODEL_NAME = "Qwen3-0.6B-Q4_K_M.gguf"
 GGUF_LIBRARY_DIR = "gguf"          # <StreamingAssets>/gguf  (your existing convention)
+
+# --------------------------------------------------------------------------- #
+# inference modes.  The three user-facing names are what the GUI/README show;
+# the internal keys ("off"/"direct"/"shim") stay stable so existing config.json
+# files, scripts and CLI invocations keep working.
+# --------------------------------------------------------------------------- #
+MODE_OFF, MODE_DIRECT, MODE_SHIM = "off", "direct", "shim"
+MODE_ORDER = (MODE_OFF, MODE_DIRECT, MODE_SHIM)
+MODE_LABELS = {
+    MODE_OFF:    "Local Mode - Basic",
+    MODE_DIRECT: "Local Mode - Advanced",
+    MODE_SHIM:   "Remote Mode - OpenAI API Compatible Endpoint",
+}
+MODE_TIPS = {
+    MODE_OFF:    "unmodified game: the bundled LlamaLib runs your GGUF in-process (no network)",
+    MODE_DIRECT: "game -> a llama.cpp-protocol server you run yourself (llama-server); no shim",
+    MODE_SHIM:   "game -> built-in shim on localhost -> any OpenAI-compatible BaseURL",
+}
+MODE_ALIASES = {
+    # Local Mode - Basic
+    "off": MODE_OFF, "basic": MODE_OFF, "local": MODE_OFF, "local-basic": MODE_OFF,
+    "local-only": MODE_OFF, "local-mode-basic": MODE_OFF,
+    # Local Mode - Advanced
+    "direct": MODE_DIRECT, "advanced": MODE_DIRECT, "local-advanced": MODE_DIRECT,
+    "remote-direct": MODE_DIRECT, "local-mode-advanced": MODE_DIRECT,
+    # Remote Mode - OpenAI API Compatible Endpoint
+    "shim": MODE_SHIM, "remote": MODE_SHIM, "openai": MODE_SHIM, "remote-shim": MODE_SHIM,
+    "remote-openai": MODE_SHIM, "openai-compatible": MODE_SHIM,
+    "remote-mode-openai-api-compatible-endpoint": MODE_SHIM,
+}
+
+
+def normalize_mode(value, default: str = MODE_OFF) -> str:
+    """Map any accepted spelling (old key, new name, CLI alias) onto a mode key."""
+    key = str(value or "").strip().lower().replace(" ", "-").replace("_", "-")
+    return MODE_ALIASES.get(key, default)
+
+
+def mode_label(value) -> str:
+    key = normalize_mode(value, default=str(value))
+    return MODE_LABELS.get(key, str(value))
 
 CONFIG_DIR = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / APP_SLUG
 DATA_HOME = Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local/share")) / APP_SLUG
@@ -166,7 +224,7 @@ def log(msg: str) -> str:
 def load_config() -> dict:
     cfg = {
         "game_dir": "",
-        "mode": "shim",            # off | shim | direct | server
+        "mode": "shim",            # off (Local-Basic) | direct (Local-Advanced) | shim (Remote-OpenAI)
         "shim_listen": "127.0.0.1",
         "shim_port": 13333,
         "backend_url": "",
@@ -185,6 +243,7 @@ def load_config() -> dict:
             cfg.update(json.loads(CONFIG_FILE.read_text(encoding="utf-8")))
     except Exception as exc:
         log(f"config load failed: {exc}")
+    cfg["mode"] = normalize_mode(cfg.get("mode"), MODE_SHIM)
     return cfg
 
 
@@ -1509,7 +1568,7 @@ def build_change_set(cfg: dict, res: ScanResult, overrides: dict | None = None
     llm_changes: dict = {}
     notes: list[str] = []
     overrides = overrides or {}
-    mode = cfg.get("mode", "off")
+    mode = normalize_mode(cfg.get("mode", MODE_OFF))
 
     if not res.agents:
         notes.append("no LLMAgent components found — nothing to patch")
@@ -1518,7 +1577,8 @@ def build_change_set(cfg: dict, res: ScanResult, overrides: dict | None = None
 
     if mode == "off":
         agent_changes["remote"] = False
-        notes.append("local inference: agents use the in-process llama.cpp service")
+        notes.append(f"{MODE_LABELS[MODE_OFF]}: agents use the in-process llama.cpp "
+                     f"service (nothing leaves the machine)")
     elif mode == "shim":
         agent_changes["remote"] = True
         wanted_host = cfg.get("agent_host") or cur_host or "localhost"
@@ -1529,7 +1589,8 @@ def build_change_set(cfg: dict, res: ScanResult, overrides: dict | None = None
         else:
             notes.append("host left unchanged: " + why)
         agent_changes["port"] = int(cfg.get("shim_port", 13333))
-        notes.append(f"agents -> built-in shim on {wanted_host}:{cfg.get('shim_port',13333)} "
+        notes.append(f"{MODE_LABELS[MODE_SHIM]}: agents -> built-in shim on "
+                     f"{wanted_host}:{cfg.get('shim_port',13333)} "
                      f"-> {cfg.get('backend_url') or '<no BaseURL set>'} "
                      f"(model {cfg.get('backend_model') or '-'})")
         if not cfg.get("backend_url"):
@@ -1542,29 +1603,30 @@ def build_change_set(cfg: dict, res: ScanResult, overrides: dict | None = None
         host, port, path, tls = split_endpoint(url, int(cfg.get("direct_port", 0) or 0))
         problems = []
         if not host:
-            problems.append("BLOCKED (direct mode): no host in the BaseURL")
+            problems.append(f"BLOCKED ({MODE_LABELS[MODE_DIRECT]}): no host in the BaseURL")
         if path:
             problems.append(
-                "BLOCKED (direct mode): LlamaLib hands the host string straight to cpp-httplib "
+                f"BLOCKED ({MODE_LABELS[MODE_DIRECT]}): LlamaLib hands the host string straight to cpp-httplib "
                 "and appends /completion, /health, /apply-template … itself, so a path prefix "
                 f"like {path!r} is not supported. Give host[:port] only, or use the shim.")
         if tls:
             problems.append(
-                "BLOCKED (direct mode): TLS needs the literal string 'https://<host>' inside the "
+                f"BLOCKED ({MODE_LABELS[MODE_DIRECT]}): TLS needs the literal string 'https://<host>' inside the "
                 "host field (LlamaLib strips the scheme and switches to SSLClient). That is 8 "
                 "extra bytes and cannot fit the in-place 'localhost' slot — use the shim "
                 "(which can do TLS for you) or a BepInEx plugin.")
         ok, why = host_fits(cur_host, host)
         if not ok:
-            problems.append("BLOCKED (direct mode): " + why)
+            problems.append(f"BLOCKED ({MODE_LABELS[MODE_DIRECT]}): " + why)
         if problems:
             notes.extend(problems)
-            notes.append("Switch the mode to 'Remote via built-in shim' — it keeps host=localhost "
-                         "and holds the real BaseURL / model / API key itself.")
+            notes.append(f"Switch to '{MODE_LABELS[MODE_SHIM]}' — it keeps host=localhost "
+                         f"and holds the real BaseURL / model / API key itself.")
         else:
             agent_changes["host"] = host
             agent_changes["port"] = port
-            notes.append(f"agents -> http://{host}:{port} directly (the server must speak the "
+            notes.append(f"{MODE_LABELS[MODE_DIRECT]}: agents -> http://{host}:{port} directly "
+                         f"(the server must speak the "
                          f"llama.cpp protocol: /health /apply-template /completion /tokenize)")
         if cfg.get("api_key"):
             cur_key = res.agents[0].values.get("APIKey", "") if res.agents else ""
@@ -1574,7 +1636,8 @@ def build_change_set(cfg: dict, res: ScanResult, overrides: dict | None = None
             else:
                 notes.append("API key not patched: " + whyk)
     else:
-        notes.append(f"unknown mode {mode!r}")
+        notes.append(f"unknown mode {mode!r} — expected one of: "
+                     + ", ".join(MODE_LABELS[m] for m in MODE_ORDER))
 
     if cfg.get("expose_server"):
         llm_changes["remote"] = True
@@ -1747,6 +1810,17 @@ def selftest(game_dir: Path | None, live: bool, verbose: bool = True) -> int:
             print(("  PASS  " if ok else "  FAIL  ") + msg)
 
     print(f"== {APP_NAME} {APP_VERSION} self-test (python {sys.version.split()[0]}) ==")
+
+    print("[0] inference modes")
+    check([MODE_LABELS[m] for m in MODE_ORDER] ==
+          ["Local Mode - Basic", "Local Mode - Advanced",
+           "Remote Mode - OpenAI API Compatible Endpoint"],
+          "labels + order: " + " | ".join(MODE_LABELS[m] for m in MODE_ORDER))
+    check(all(normalize_mode(a) == k for a, k in MODE_ALIASES.items()),
+          f"all {len(MODE_ALIASES)} CLI/config aliases normalize to a mode key")
+    check(normalize_mode("Remote") == MODE_SHIM and normalize_mode("BASIC") == MODE_OFF
+          and normalize_mode("nope") == MODE_OFF and mode_label("shim") == MODE_LABELS[MODE_SHIM],
+          "normalize_mode()/mode_label() fallbacks")
 
     print("[1] ThinkStripper")
     cases = [(["<think>secret</think>Hi there!"], "Hi there!"),
@@ -1967,7 +2041,8 @@ def cli(args) -> int:
     game_dir = resolve_game_dir(args.game_dir)
     cfg = load_config()
     cfg.update({k: v for k, v in {
-        "mode": args.mode, "backend_url": args.backend_url, "backend_model": args.backend_model,
+        "mode": normalize_mode(args.mode) if args.mode else None,
+        "backend_url": args.backend_url, "backend_model": args.backend_model,
         "shim_listen": args.listen, "shim_port": args.port, "expose_server": args.expose_server,
         "server_port": args.server_port, "strip_think": args.strip_think,
     }.items() if v is not None})
@@ -2185,7 +2260,7 @@ def gui_main(args) -> int:
         def __init__(self):
             super().__init__()
             self.title(f"{APP_NAME} {APP_VERSION} — Vaudeville LLM / endpoint control")
-            self.geometry("1080x760")
+            self.geometry(getattr(args, "geometry", None) or "1080x760")
             self.minsize(900, 620)
             self.cfg = load_config()
             self.scan: ScanResult | None = None
@@ -2353,20 +2428,14 @@ def gui_main(args) -> int:
         def _tab_remote(self):
             f = ttk.Frame(self.nb, padding=10)
             self.nb.add(f, text=" Remote endpoint ")
-            self.mode_var = tk.StringVar(value=self.cfg.get("mode", "shim"))
-            modes = ttk.LabelFrame(f, text="Inference mode", padding=8)
+            self.mode_var = tk.StringVar(value=normalize_mode(self.cfg.get("mode", MODE_SHIM)))
+            modes = ttk.LabelFrame(f, text="Mode", padding=8)
             modes.pack(fill="x")
-            for text, val, tip in (
-                ("Local only (unmodified game)", "off", "agents talk to the in-process llama.cpp"),
-                ("Remote via built-in shim (recommended)", "shim",
-                 "game → shim on localhost → your BaseURL (OpenAI-compatible)"),
-                ("Remote direct (llama.cpp-compatible server only)", "direct",
-                 "game → your server; host length is constrained by in-place patching"),
-            ):
-                r = ttk.Radiobutton(modes, text=text, value=val, variable=self.mode_var,
-                                    command=self._mode_changed)
+            for val in MODE_ORDER:
+                r = ttk.Radiobutton(modes, text=MODE_LABELS[val], value=val,
+                                    variable=self.mode_var, command=self._mode_changed)
                 r.pack(anchor="w")
-                ttk.Label(modes, text="      " + tip, foreground="#666").pack(anchor="w")
+                ttk.Label(modes, text="      " + MODE_TIPS[val], foreground="#666").pack(anchor="w")
 
             be = ttk.LabelFrame(f, text="Backend (what the shim forwards to)", padding=8)
             be.pack(fill="x", pady=6)
@@ -2443,7 +2512,7 @@ def gui_main(args) -> int:
             self.action_buttons.append(b)
             b = ttk.Button(act, text="Apply to game files", command=self.apply_changes)
             b.pack(side="left", padx=6); self.action_buttons.append(b)
-            b = ttk.Button(act, text="Set back to local only", command=self.set_local)
+            b = ttk.Button(act, text=f"Reset to {MODE_LABELS[MODE_OFF]}", command=self.set_local)
             b.pack(side="left"); self.action_buttons.append(b)
             self.plan_box = tk.Text(f, height=10, wrap="word", state="disabled")
             self.plan_box.pack(fill="both", expand=True)
@@ -2623,7 +2692,7 @@ def gui_main(args) -> int:
 
         # ---------- actions: remote ---------- #
         def _mode_changed(self):
-            self.status(f"mode: {self.mode_var.get()}")
+            self.status("mode: " + mode_label(self.mode_var.get()))
 
         def _toggle_key(self):
             try:
@@ -2982,7 +3051,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--game-dir", help="Vaudeville install folder (auto-detected otherwise)")
     p.add_argument("--rescan", action="store_true", help="ignore the cached offset profile")
     p.add_argument("--show-prompts", action="store_true", help="print full system prompts with --cli list")
-    p.add_argument("--mode", choices=["off", "shim", "direct"], help="inference mode")
+    p.add_argument("--mode", choices=sorted(MODE_ALIASES),
+                   help="inference mode: basic|off = '%s', advanced|direct = '%s', "
+                        "remote|shim = '%s'" % (MODE_LABELS[MODE_OFF], MODE_LABELS[MODE_DIRECT],
+                                               MODE_LABELS[MODE_SHIM]))
+    p.add_argument("--geometry", help="initial window geometry, e.g. 1280x900 (used for screenshots)")
     p.add_argument("--backend-url", help="OpenAI-compatible BaseURL, e.g. http://127.0.0.1:8000/v1")
     p.add_argument("--backend-model", help="model name the backend expects")
     p.add_argument("--api-key", help="backend API key (prefer --api-key-env)")
