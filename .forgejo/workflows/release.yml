@@ -196,11 +196,12 @@ jobs:
           auth="Authorization: token $TOKEN"
           tag="v$VER"
           ls -la artifacts
-          remote="https://x-access-token:$TOKEN@${{ github.server_url }}"; remote="${remote#https://}"
-          tag_sha="$(git ls-remote "https://$remote/$repo.git" "refs/tags/$tag" | cut -f1 || true)"
+          host="${{ github.server_url }}"; host="${host#https://}"
+          tag_sha="$(git ls-remote "https://x-access-token:$TOKEN@$host/$repo.git" "refs/tags/$tag" | cut -f1 || true)"
+          j() { python3 -c 'import json,sys; print(json.load(sys.stdin)$1)'; }
           rel="$(curl -sf -H "$auth" "$api/repos/$repo/releases/tags/$tag" || true)"
           if [ -n "$rel" ]; then
-            id="$(jq -r .id <<<"$rel")"
+            id="$(printf '%s' "$rel" | j "['id']")"
             if [ -n "$tag_sha" ] && [ "$tag_sha" != "${{ github.sha }}" ]; then
               echo "tag $tag belongs to $tag_sha, not ${{ github.sha }}; refusing to overwrite" >&2
               exit 1
@@ -208,31 +209,34 @@ jobs:
             echo "### reusing existing release $id for tag $tag (retry)"
             for f in artifacts/*; do
               n="$(basename "$f")"
-              aid="$(jq -r --arg n "$n" '.assets[] | select(.name==$n) | .id' <<<"$rel")"
-              if [ -n "$aid" ] && [ "$aid" != "null" ]; then
+              aid="$(printf '%s' "$rel" | python3 -c 'import json,sys; n=sys.argv[1]; print(next((a["id"] for a in json.load(sys.stdin)["assets"] if a["name"]==n), ""))' "$n")"
+              if [ -n "$aid" ]; then
                 curl -sf -X DELETE -H "$auth" "$api/repos/$repo/releases/$id/assets/$aid" >/dev/null
               fi
             done
           else
             notes="$(printf '%s' "$NOTES_B64" | base64 -d)"
-            body=""
-            while IFS= read -r l; do body+="* $l"$'\n'; done <<<"$notes"
-            rel="$(curl -sf -X POST -H "$auth" -H 'Content-Type: application/json' \
-                   -d "$(jq -n --arg t "$tag" --arg s "${{ github.sha }}" \
-                            --arg n "${REPO_NAME} v$VER" --arg b "$body" \
-                        '{tag_name:$t, target_commitish:$s, name:$n, body:$b}')" \
-                   "$api/repos/$repo/releases")"
-            id="$(jq -r .id <<<"$rel")"
+            body="$(printf '%s\n' "$notes" | sed 's/^/* /')"
+            payload="$(python3 -c 'import json,sys; t,s,n,b=sys.argv[1:5]; print(json.dumps({"tag_name":t,"target_commitish":s,"name":n,"body":b}))' "$tag" "${{ github.sha }}" "${REPO_NAME} v$VER" "$body")"
+            rel="$(curl -sf -X POST -H "$auth" -H 'Content-Type: application/json' -d "$payload" "$api/repos/$repo/releases")"
+            id="$(printf '%s' "$rel" | j "['id']")"
           fi
           for f in artifacts/*; do
             n="$(basename "$f")"
-            curl -sf -H "$auth" -F "attachment=@$f;filename=$n" \
-                 "$api/repos/$repo/releases/$id/assets" >/dev/null
+            curl -sf -H "$auth" -F "attachment=@$f;filename=$n" "$api/repos/$repo/releases/$id/assets" >/dev/null
             echo "### uploaded $n"
           done
           rel="$(curl -sf -H "$auth" "$api/repos/$repo/releases/$id")"
-          jq -r '.tag_name, (.assets[] | "\(.name)  \(.size) bytes")' <<<"$rel"
-          [ "$(jq '.assets | length' <<<"$rel")" -ge 2 ] || { echo "missing assets" >&2; exit 1; }
+          printf '%s' "$rel" | python3 -c '
+          import json, sys
+          d = json.load(sys.stdin)
+          print("release:", d["tag_name"], d["name"])
+          for a in d["assets"]:
+              print("  asset:", a["name"], a["size"], "bytes")
+          if len(d["assets"]) < 2:
+              sys.exit("expected >=2 assets on the release")
+          '
+          echo "### release published: $api/repos/$repo/releases/$id"
 
   bump-commit:
     needs: [gate, publish]
