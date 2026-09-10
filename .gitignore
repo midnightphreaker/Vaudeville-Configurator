@@ -1,0 +1,12 @@
+# defaults
+.DS_Store
+*.log
+*.tmp
+node_modules/
+__pycache__/
+*.pyc
+.env
+.venv/
+dist/
+build/
+*.swp
