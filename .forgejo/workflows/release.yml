@@ -81,11 +81,12 @@ jobs:
           rel="$(curl -sf -H "$auth" "$api/repos/$repo/releases/tags/$tag" || true)"
           if [ -n "$rel" ]; then
             id="$(printf '%s' "$rel" | python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])')"
-            if [ -n "$tag_sha" ] && [ "$tag_sha" != "${{ github.sha }}" ]; then
+            is_draft="$(printf '%s' "$rel" | python3 -c 'import json,sys; print(json.load(sys.stdin)["draft"])')"
+            if [ "$is_draft" != "True" ] && [ -n "$tag_sha" ] && [ "$tag_sha" != "${{ github.sha }}" ]; then
               echo "tag $tag belongs to $tag_sha, not ${{ github.sha }}; refusing to overwrite" >&2
               exit 1
             fi
-            echo "### reusing existing release $id for tag $tag (retry): clearing its assets"
+            echo "### reusing existing release $id for tag $tag (draft=$is_draft): clearing its assets"
             printf '%s' "$rel" | python3 -c '
           import json, sys
           for a in json.load(sys.stdin)["assets"]:
@@ -96,10 +97,10 @@ jobs:
           else
             notes="$(printf '%s' "$NOTES_B64" | base64 -d)"
             body="$(printf '%s\n' "$notes" | sed 's/^/* /')"
-            payload="$(python3 -c 'import json,sys; t,s,n,b=sys.argv[1:5]; print(json.dumps({"tag_name":t,"target_commitish":s,"name":n,"body":b}))' "$tag" "${{ github.sha }}" "${REPO_NAME} v$VER" "$body")"
+            payload="$(python3 -c 'import json,sys; t,s,n,b=sys.argv[1:5]; print(json.dumps({"tag_name":t,"target_commitish":s,"name":n,"body":b,"draft":True}))' "$tag" "${{ github.sha }}" "${REPO_NAME} v$VER" "$body")"
             rel="$(curl -sf -X POST -H "$auth" -H 'Content-Type: application/json' -d "$payload" "$api/repos/$repo/releases")"
             id="$(printf '%s' "$rel" | python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])')"
-            echo "### created release $id for tag $tag"
+            echo "### created DRAFT release $id for tag $tag (published only after both assets verify)"
           fi
           echo "release_id=$id" >> "$GITHUB_OUTPUT"
 
@@ -231,8 +232,11 @@ jobs:
           if len(names) < 2 or not any(n.endswith(need[0]) for n in names) \
              or not any(need[1] in n for n in names):
               sys.exit(f"release assets incomplete: {names}")
-          print("### release verified:", d["html_url"])
+          print("### assets verified:", names)
           '
+          curl -sf -X PATCH -H "$auth" -H 'Content-Type: application/json' \
+               -d '{"draft": false}' "$api/repos/$repo/releases/${RELEASE_ID}" >/dev/null
+          echo "### release published: $(curl -sf -H "$auth" "$api/repos/$repo/releases/${RELEASE_ID}" | python3 -c 'import json,sys; print(json.load(sys.stdin)["html_url"])')"
 
   bump-commit:
     needs: [gate, publish]
