@@ -18,8 +18,12 @@ Run:  python3 poc_remote_llamalib.py --port 13333
 import argparse, ctypes, json, os, sys, time
 from pathlib import Path
 
-_REL = ("Vaudeville_Data/StreamingAssets/LlamaLib-v2.0.0/linux-x64/native/"
-        "libllamalib_linux-x64_avx2.so")
+if os.name == "nt":
+    _REL = ("Vaudeville_Data/StreamingAssets/LlamaLib-v2.0.0/win-x64/native/"
+            "libllamalib_win-x64_avx2.dll")
+else:
+    _REL = ("Vaudeville_Data/StreamingAssets/LlamaLib-v2.0.0/linux-x64/native/"
+            "libllamalib_linux-x64_avx2.so")
 
 
 def find_native() -> str:

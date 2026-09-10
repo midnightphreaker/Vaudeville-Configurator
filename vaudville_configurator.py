@@ -25,6 +25,14 @@ Remote Mode - OpenAI API Compatible Endpoint    internal key: shim     (CLI: --m
     any OpenAI-compatible BaseURL (vLLM, Ollama, LM Studio, llama.cpp, OpenAI,
     OpenRouter, TGI, koboldcpp, ...). Arbitrary BaseURL / model name / API key / TLS.
 
+Platform
+--------
+Linux is the primary target. Windows is supported end to end: Steam detection via
+the registry, process detection via tasklist, %APPDATA%/%LOCALAPPDATA% state dirs,
+detached shim processes, folder opening, and model relinking (symlink, with a
+same-volume hardlink fallback where symlink rights are missing). macOS has no hard
+blockers but is untested.
+
 What it does
 ------------
 Vaudeville's dialogue AI is undreamai/LLMUnity v3.0.0 + LlamaLib v2.0.0 (a llama.cpp
@@ -82,7 +90,7 @@ from pathlib import Path
 
 APP_NAME = "Vaudville Configurator"
 APP_SLUG = "vaudville-configurator"
-APP_VERSION = "1.2.0"
+APP_VERSION = "1.3.0"
 STEAM_APPID = "2240920"
 GAME_DIR_NAME = "Vaudeville"
 DATA_DIR = "Vaudeville_Data"
@@ -134,9 +142,29 @@ def mode_label(value) -> str:
     key = normalize_mode(value, default=str(value))
     return MODE_LABELS.get(key, str(value))
 
-CONFIG_DIR = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / APP_SLUG
-DATA_HOME = Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local/share")) / APP_SLUG
-STATE_HOME = Path(os.environ.get("XDG_STATE_HOME", Path.home() / ".local/state")) / APP_SLUG
+IS_WINDOWS = os.name == "nt"
+IS_MACOS = sys.platform == "darwin"
+
+
+def _user_dirs() -> tuple[Path, Path, Path]:
+    """(config, data, state) roots: XDG where present, else per-platform defaults."""
+    if IS_WINDOWS:
+        roaming = Path(os.environ.get("APPDATA", str(Path.home() / "AppData/Roaming")))
+        local = Path(os.environ.get("LOCALAPPDATA", str(Path.home() / "AppData/Local")))
+        default = (roaming / APP_SLUG, local / APP_SLUG / "data", local / APP_SLUG / "state")
+    else:
+        default = (Path.home() / ".config" / APP_SLUG,
+                   Path.home() / ".local/share" / APP_SLUG,
+                   Path.home() / ".local/state" / APP_SLUG)
+    env = (os.environ.get("XDG_CONFIG_HOME"), os.environ.get("XDG_DATA_HOME"),
+           os.environ.get("XDG_STATE_HOME"))
+    out = []
+    for var, dflt in zip(env, default):
+        out.append(Path(var) / APP_SLUG if var else dflt)
+    return out[0], out[1], out[2]
+
+
+CONFIG_DIR, DATA_HOME, STATE_HOME = _user_dirs()
 CONFIG_FILE = CONFIG_DIR / "config.json"
 BACKUP_ROOT = DATA_HOME / "backups"
 PROFILE_FILE = STATE_HOME / "asset-profile.json"
@@ -207,6 +235,25 @@ def align4(n: int) -> int:
     return (n + 3) & ~3
 
 
+def _detached_kwargs() -> dict:
+    """Detach a child process on both platforms."""
+    if IS_WINDOWS:
+        flags = (getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+                 | getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        return {"creationflags": flags} if flags else {}
+    return {"start_new_session": True}
+
+
+def open_in_folder(path: Path) -> None:
+    """Open a directory in the platform file manager."""
+    if IS_WINDOWS and hasattr(os, "startfile"):
+        os.startfile(str(path))                      # noqa: S606 - explorer on a dir
+    elif IS_MACOS:
+        subprocess.Popen(["open", str(path)], **_detached_kwargs())
+    else:
+        subprocess.Popen(["xdg-open", str(path)], **_detached_kwargs())
+
+
 # --------------------------------------------------------------------------- #
 # logging / config
 # --------------------------------------------------------------------------- #
@@ -261,6 +308,38 @@ def save_config(cfg: dict) -> None:
 # --------------------------------------------------------------------------- #
 # Steam / game detection
 # --------------------------------------------------------------------------- #
+def _windows_steam_dirs() -> list[Path]:
+    """Steam install dirs on Windows: registry first, then the usual defaults."""
+    out: list[Path] = []
+
+    def add(p: Path):
+        if p.is_dir() and p not in out:
+            out.append(p)
+
+    try:
+        import winreg                                  # windows only
+        hives = [(winreg.HKEY_CURRENT_USER, r"Software\Valve\Steam"),
+                 (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\WOW6432Node\Valve\Steam"),
+                 (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Valve\Steam")]
+        for hive, sub in hives:
+            try:
+                with winreg.OpenKey(hive, sub) as key:
+                    for name in ("SteamPath", "InstallPath"):
+                        try:
+                            value, _ = winreg.QueryValueEx(key, name)
+                        except OSError:
+                            continue
+                        add(Path(str(value).replace("\\", "/")))
+            except OSError:
+                continue
+    except ImportError:
+        pass
+    prog = os.environ.get("PROGRAMFILES(X86)") or r"C:\Program Files (x86)"
+    add(Path(prog) / "Steam")
+    add(Path(os.environ.get("PROGRAMFILES", r"C:\Program Files")) / "Steam")
+    return out
+
+
 def _vdf_library_paths() -> list[Path]:
     out: list[Path] = []
     candidates = [
@@ -268,6 +347,7 @@ def _vdf_library_paths() -> list[Path]:
         Path.home() / ".steam/steam/steamapps/libraryfolders.vdf",
         Path.home() / ".var/app/com.valvesoftware.Steam/.local/share/Steam/steamapps/libraryfolders.vdf",
     ]
+    candidates += [d / "steamapps" / "libraryfolders.vdf" for d in _windows_steam_dirs()]
     for vdf in candidates:
         if not vdf.is_file():
             continue
@@ -284,7 +364,7 @@ def _vdf_library_paths() -> list[Path]:
 
 def _steam_roots() -> list[Path]:
     roots = _vdf_library_paths()
-    for extra in (
+    for extra in tuple(_windows_steam_dirs()) + (
         Path.home() / ".local/share/Steam",
         Path.home() / ".steam/steam",
         Path.home() / ".steam/debian-installation",
@@ -303,7 +383,9 @@ def _steam_roots() -> list[Path]:
 
 def is_game_dir(path: Path) -> bool:
     return (path / DATA_DIR / STREAMING).is_dir() and (
-        (path / DATA_DIR / "app.info").is_file() or (path / f"{GAME_DIR_NAME}.x86_64").is_file()
+        (path / DATA_DIR / "app.info").is_file()
+        or (path / f"{GAME_DIR_NAME}.x86_64").is_file()
+        or (path / f"{GAME_DIR_NAME}.exe").is_file()
     )
 
 
@@ -342,7 +424,56 @@ def find_game_dirs() -> list[tuple[Path, str]]:
     return found
 
 
+def parse_tasklist_csv(text: str, image: str) -> list[int]:
+    """PIDs of `image` from `tasklist /FO CSV /NH` output (pure, unit-testable)."""
+    pids = []
+    want = image.lower()
+    for line in text.splitlines():
+        cells = [c.strip().strip('"') for c in line.split('","')]
+        if len(cells) >= 2 and (not want or cells[0].lower() == want) and cells[1].isdigit():
+            pids.append(int(cells[1]))
+    return pids
+
+
+def _tasklist(query: list[str]) -> str:
+    try:
+        out = subprocess.run(["tasklist", *query, "/FO", "CSV", "/NH"],
+                             capture_output=True, text=True, timeout=15)
+        return out.stdout or ""
+    except (OSError, subprocess.SubprocessError):
+        return ""
+
+
+def pid_alive(pid: int) -> bool:
+    if IS_WINDOWS:
+        return pid in parse_tasklist_csv(_tasklist(["/FI", f"PID eq {pid}"]), "")
+    try:
+        os.kill(pid, 0)
+    except OSError:
+        return False
+    return True
+
+
+def terminate_pid(pid: int, force: bool = False) -> bool:
+    """SIGTERM/SIGKILL on POSIX, taskkill on Windows. Returns True when signalled."""
+    if IS_WINDOWS:
+        args = ["taskkill", "/PID", str(pid), "/T"] + (["/F"] if force else [])
+        try:
+            return subprocess.run(args, capture_output=True, timeout=15).returncode == 0
+        except (OSError, subprocess.SubprocessError):
+            return False
+    try:
+        os.kill(pid, 9 if force else 15)
+        return True
+    except OSError:
+        return False
+
+
 def game_is_running(game_dir: Path) -> list[int]:
+    if IS_WINDOWS:
+        # the binary name is unique to the game, so image-name matching is exact enough
+        return parse_tasklist_csv(_tasklist(["/FI", f"IMAGENAME eq {GAME_DIR_NAME}.exe"]),
+                                  f"{GAME_DIR_NAME}.exe")
     pids = []
     target = str(game_dir.resolve())
     for entry in os.listdir("/proc"):
@@ -935,14 +1066,32 @@ def slot_status(game_dir: Path, slot: ModelSlot) -> dict:
         info["target"] = str(link)
     if link.exists():
         try:
-            info["size"] = link.stat().st_size
+            st = link.stat()
+            info["size"] = st.st_size
+            if not info["is_link"] and getattr(st, "st_nlink", 1) > 1:
+                info["is_link"] = True          # hardlink stand-in (Windows)
+                info["target"] = str(link.resolve())
         except OSError:
             pass
     return info
 
 
+def _make_link(tmp: Path, target: Path) -> str:
+    """Symlink where possible; on Windows fall back to a same-volume hardlink
+    (creating symlinks there needs Developer Mode or SeCreateSymbolicLink)."""
+    try:
+        tmp.symlink_to(target)
+        return "symlink"
+    except OSError:
+        if not IS_WINDOWS:
+            raise
+        os.link(target, tmp)
+        return "hardlink"
+
+
 def set_slot_model(game_dir: Path, slot: ModelSlot, model: Path, dry_run: bool = False) -> list[str]:
-    """Point a hard-coded model filename at `model` via symlink, preserving any real file."""
+    """Point a hard-coded model filename at `model` via symlink (or hardlink on
+    Windows), preserving any real file."""
     model = Path(model).expanduser().resolve()
     if not model.is_file():
         raise PatchError(f"model file not found: {model}")
@@ -958,12 +1107,13 @@ def set_slot_model(game_dir: Path, slot: ModelSlot, model: Path, dry_run: bool =
         if current == model:
             actions.append(f"{slot.name}: already points at {model.name}")
             return actions
-        actions.append(f"repoint symlink {slot.name}: {current.name} -> {model.name}")
+        actions.append(f"repoint link {slot.name}: {current.name} -> {model.name}")
         if not dry_run:
             tmp = link.with_name(f".{link.name}.tmp-{os.getpid()}")
             tmp.unlink(missing_ok=True)
-            tmp.symlink_to(model)
+            kind = _make_link(tmp, model)
             os.replace(tmp, link)
+            actions.append(f"{slot.name} is now a {kind}")
         return actions
     if link.is_file():
         if not dry_run:
@@ -978,14 +1128,15 @@ def set_slot_model(game_dir: Path, slot: ModelSlot, model: Path, dry_run: bool =
     elif link.exists():
         raise PatchError(f"{link} exists but is neither a file nor a symlink")
     else:
-        actions.append(f"create symlink {slot.name}")
+        actions.append(f"create link {slot.name}")
     if not dry_run:
         tmp = link.with_name(f".{link.name}.tmp-{os.getpid()}")
         tmp.unlink(missing_ok=True)
-        tmp.symlink_to(model)
+        kind = _make_link(tmp, model)
         os.replace(tmp, link)
         if not link.exists():
-            raise PatchError("symlink verification failed")
+            raise PatchError("link verification failed")
+        actions.append(f"{slot.name} link kind: {kind}")
     actions.append(f"{slot.name} -> {model}")
     log("; ".join(actions))
     return actions
@@ -1398,11 +1549,7 @@ class ShimProcess:
             pid = int(self.pid_file.read_text().strip())
         except Exception:
             return None
-        try:
-            os.kill(pid, 0)
-        except OSError:
-            return None
-        return pid
+        return pid if pid_alive(pid) else None
 
     def running(self) -> bool:
         return self.proc is not None and self.proc.poll() is None or self._read_pid() is not None
@@ -1443,7 +1590,7 @@ class ShimProcess:
             self.proc = subprocess.Popen(
                 [sys.executable, str(Path(__file__).resolve()), "--shim", "--config", str(cfg_path)],
                 stdout=logfh, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
-                env=env, start_new_session=True, cwd=str(Path.home()))
+                env=env, cwd=str(Path.home()), **_detached_kwargs())
         except OSError as exc:
             return False, f"failed to start shim: {exc}"
         self.pid_file.write_text(str(self.proc.pid))
@@ -1461,21 +1608,14 @@ class ShimProcess:
         if not pid:
             self.proc = None
             return "shim was not running"
-        try:
-            os.kill(pid, 15)
-        except OSError as exc:
-            return f"stop failed: {exc}"
+        if not terminate_pid(pid):
+            return f"stop failed: could not signal pid {pid}"
         for _ in range(40):
-            try:
-                os.kill(pid, 0)
-            except OSError:
+            if not pid_alive(pid):
                 break
             time.sleep(0.1)
         else:
-            try:
-                os.kill(pid, 9)
-            except OSError:
-                pass
+            terminate_pid(pid, force=True)
         self.pid_file.unlink(missing_ok=True)
         self.proc = None
         log(f"shim stopped (pid {pid})")
@@ -1668,9 +1808,15 @@ def build_change_set(cfg: dict, res: ScanResult, overrides: dict | None = None
 # --------------------------------------------------------------------------- #
 def find_native_lib(game_dir: Path) -> Path | None:
     base = game_dir / DATA_DIR / STREAMING
-    for pattern in ("LlamaLib-*/linux-x64/native/libllamalib_linux-x64_avx2.so",
+    if IS_WINDOWS:
+        patterns = ("LlamaLib-*/win-x64/native/libllamalib_win-x64_avx2.dll",
+                    "LlamaLib-*/win-x64/native/libllamalib_win-x64_noavx.dll",
+                    "LlamaLib-*/win*-x64/native/libllamalib_win-x64_*.dll")
+    else:
+        patterns = ("LlamaLib-*/linux-x64/native/libllamalib_linux-x64_avx2.so",
                     "LlamaLib-*/linux-x64/native/libllamalib_linux-x64_noavx.so",
-                    "LlamaLib-*/linux-x64/native/libllamalib_linux-x64_*.so"):
+                    "LlamaLib-*/linux-x64/native/libllamalib_linux-x64_*.so")
+    for pattern in patterns:
         for p in sorted(base.glob(pattern)):
             if p.is_file():
                 return p
@@ -1821,6 +1967,43 @@ def selftest(game_dir: Path | None, live: bool, verbose: bool = True) -> int:
     check(normalize_mode("Remote") == MODE_SHIM and normalize_mode("BASIC") == MODE_OFF
           and normalize_mode("nope") == MODE_OFF and mode_label("shim") == MODE_LABELS[MODE_SHIM],
           "normalize_mode()/mode_label() fallbacks")
+
+    print("[0b] platform helpers (linux + windows code paths)")
+    c, d, s = _user_dirs()
+    check(all(p.is_absolute() for p in (c, d, s)) and len({c, d, s}) == 3,
+          f"user dirs: {c} | {d} | {s}")
+    sample = ('"Image Name","PID","Session Name","Session#","Mem Usage"\r\n'
+              '"Vaudeville.exe","4321","Console","1","1,234 K"\r\n'
+              '"steam.exe","99","Console","1","500 K"\r\n')
+    check(parse_tasklist_csv(sample, "Vaudeville.exe") == [4321]
+          and parse_tasklist_csv(sample, "steam.exe") == [99]
+          and parse_tasklist_csv(sample, "") == [4321, 99]
+          and parse_tasklist_csv(sample, "nope.exe") == [],
+          "tasklist CSV parser (windows process detection)")
+    import tempfile
+    with tempfile.TemporaryDirectory() as td:
+        fake = Path(td) / "Vaudeville"
+        (fake / DATA_DIR / STREAMING).mkdir(parents=True)
+        (fake / f"{GAME_DIR_NAME}.exe").write_bytes(b"MZ")
+        (fake / DATA_DIR / "app.info").write_text("x")
+        check(is_game_dir(fake), "is_game_dir accepts a windows-style install (.exe)")
+        tgt = Path(td) / "Model.gguf"
+        tgt.write_bytes(b"gguf")
+        lnk = Path(td) / "Link.gguf"
+        kind = _make_link(lnk, tgt)
+        check(lnk.exists() and lnk.read_bytes() == b"gguf" and kind in ("symlink", "hardlink"),
+              f"_make_link works here via {kind}")
+    check(isinstance(game_is_running(Path.home()), list),
+          "game_is_running returns a list on this platform")
+    global IS_WINDOWS
+    real_win, IS_WINDOWS = IS_WINDOWS, True
+    try:
+        wk = _detached_kwargs()
+        wd = _windows_steam_dirs()
+    finally:
+        IS_WINDOWS = real_win
+    check(wk == {} or set(wk) == {"creationflags"}, f"windows detach kwargs: {wk}")
+    check(isinstance(wd, list), f"windows steam-dir probe safe off-windows: {wd}")
 
     print("[1] ThinkStripper")
     cases = [(["<think>secret</think>Hi there!"], "Hi there!"),
@@ -2688,7 +2871,7 @@ def gui_main(args) -> int:
                 return
             d = library_dir(gd)
             d.mkdir(parents=True, exist_ok=True)
-            subprocess.Popen(["xdg-open", str(d)], start_new_session=True)
+            open_in_folder(d)
 
         # ---------- actions: remote ---------- #
         def _mode_changed(self):
@@ -3012,7 +3195,7 @@ def gui_main(args) -> int:
 
         def open_backups(self):
             BACKUP_ROOT.mkdir(parents=True, exist_ok=True)
-            subprocess.Popen(["xdg-open", str(BACKUP_ROOT)], start_new_session=True)
+            open_in_folder(BACKUP_ROOT)
 
         def _on_close(self):
             try:
