@@ -728,6 +728,42 @@ stop) with `pgrep` confirming the shim child was the executable itself.
 Caveats: unsigned one-file executables trip some AV/Defender heuristics — allow-list the
 binary or sign it; and rebuilding is how you update (the exe embeds its Python version).
 
+### CI runners & releases
+
+`.forgejo/workflows/release.yml` publishes the two single-file builds as a Forgejo
+release whenever the version changes:
+
+| trigger | behaviour |
+|---|---|
+| push to `main` | publishes **only** when `VERSION` has no release tag yet (ordinary commits skip) |
+| *Actions → release → Run workflow* | choice `Major` (1.3.0 → 1.4.0), `minor` (→ 1.3.1) or `retry` (same version); the bump is applied to the build inputs before checks and committed to `main` **only after** the release published, and that commit can never re-trigger a release |
+
+Jobs: `gate` (version/publish decision + release notes from the last ≤10 commit subjects)
+→ `build-linux` (`--selftest`, optional `--gui-check` under Xvfb, `tools/build_package.sh`)
++ `build-windows` (`--selftest`, `tools\build_package.cmd`) → `publish` (creates/reuses the
+release, uploads both assets, verifies them) → `bump-commit`.
+Assets: `Vaudville-Configurator.v<ver>-linux-amd64.tar.gz` and
+`Vaudville-Configurator.v<ver>-windows-x86_64.zip` (binary + README + VERSION inside).
+A `retry` reuses the release of the *same* commit and refuses tags owned by other commits.
+
+The workflow needs **two runners** (none are bundled with Forgejo):
+
+| runner | label required | needs |
+|---|---|---|
+| Linux box | `ubuntu-latest` | python3, internet for pip; Xvfb optional |
+| Windows box/VM | `windows-latest` | python.org Python, git |
+
+Register them (token via env or stdin, never in history):
+
+```bash
+VLM_RUNNER_TOKEN=*** bash tools/register_runner.sh linux     # on the Linux box
+VLM_RUNNER_TOKEN=*** bash tools/register_runner.sh windows   # on the Windows box
+```
+
+The token comes from *repo Settings → Actions → Runners → Register new runner*.
+Queued runs (including the first-release run for the current version) start by
+themselves as soon as both runners are online.
+
 ---
 
 ## 13. Provenance & legal
