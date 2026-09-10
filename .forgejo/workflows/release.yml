@@ -180,8 +180,36 @@ jobs:
         working-directory: src
         run: |
           set -euo pipefail
-          pyinstaller --onefile --clean --name VaudvilleConfigurator vaudville_configurator.py
+          # Pure-python data modules the GUI depends on.  Declared explicitly so
+          # the bundle is correct however vaudville_configurator.py imports them
+          # (top level, inside a "try: ... except ImportError:" fallback, or
+          # lazily inside a function).  Keep in sync with tools/build_package.sh,
+          # tools/build_package.cmd and vaudville-configurator.spec.
+          extra_modules="vaudville_cast vaudville_help"
+          hidden=()
+          for m in $extra_modules; do hidden+=(--hidden-import "$m"); done
+          pyinstaller --onefile --clean --name VaudvilleConfigurator \
+            ${hidden[@]+"${hidden[@]}"} vaudville_configurator.py
           ls -la dist/VaudvilleConfigurator.exe
+          # Prove the data modules really landed inside the .exe.  A module whose
+          # .py is absent from this checkout is skipped: PyInstaller only warns
+          # about an unresolvable --hidden-import, and that must not fail a build.
+          listing="$(python -m PyInstaller.utils.cliutils.archive_viewer -l -r -b \
+                       dist/VaudvilleConfigurator.exe 2>/dev/null || true)"
+          if [ -z "$listing" ]; then
+            echo "### WARNING: archive_viewer gave no output under Wine; bundle contents unverified"
+          else
+            for m in $extra_modules; do
+              if [ ! -f "$m.py" ]; then
+                echo "### note: $m.py not in this checkout; skipping its bundle assertion"
+              elif printf '%s\n' "$listing" | grep -qE "^[[:space:]]*$m\$"; then
+                echo "### bundle contains $m"
+              else
+                echo "### ERROR: $m is missing from dist/VaudvilleConfigurator.exe" >&2
+                exit 1
+              fi
+            done
+          fi
       - name: smoke-test the exe under Wine (incl. tkinter/GUI)
         working-directory: src
         run: |

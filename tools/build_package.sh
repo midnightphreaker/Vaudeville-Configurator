@@ -10,6 +10,14 @@ ROOT="$(cd "$HERE/.." && pwd)"
 cd "$ROOT"
 NAME="${NAME:-vaudville-configurator}"
 VENV="${VENV:-.venv-build}"          # build-only venv; never touches system python
+
+# Pure-python data modules the GUI depends on.  Declared explicitly so the
+# bundle is correct however vaudville_configurator.py imports them: top level,
+# inside a "try: ... except ImportError:" fallback, or lazily inside a
+# function.  Keep in sync with vaudville-configurator.spec,
+# tools/build_package.cmd and .forgejo/workflows/release.yml.
+EXTRA_MODULES="${EXTRA_MODULES:-vaudville_cast vaudville_help}"
+
 if [ ! -x "$VENV/bin/pyinstaller" ]; then
   if ! python3 -m venv "$VENV" >/dev/null 2>&1 \
      || ! "$VENV/bin/python" -m pip --version >/dev/null 2>&1; then
@@ -22,5 +30,37 @@ if [ ! -x "$VENV/bin/pyinstaller" ]; then
   "$VENV/bin/python" -m pip install --upgrade pip
   "$VENV/bin/python" -m pip install pyinstaller
 fi
-"$VENV/bin/pyinstaller" --onefile --clean --name "$NAME" vaudville_configurator.py
+
+HIDDEN=()
+for m in $EXTRA_MODULES; do
+  HIDDEN+=(--hidden-import "$m")
+done
+
+# ${HIDDEN[@]+...} keeps "set -u" happy on bash 3.2 (macOS) if the list is empty.
+"$VENV/bin/pyinstaller" --onefile --clean --name "$NAME" \
+  ${HIDDEN[@]+"${HIDDEN[@]}"} vaudville_configurator.py
+
+# Prove the data modules really landed inside the bundle.  A module whose .py
+# is absent from the tree is skipped: PyInstaller only warns about an
+# unresolvable --hidden-import, and we do not want to fail a build for a file
+# that legitimately is not part of this checkout.
+listing="$("$VENV/bin/python" -m PyInstaller.utils.cliutils.archive_viewer \
+             -l -r -b "dist/$NAME" 2>/dev/null || true)"
+if [ -z "$listing" ]; then
+  echo "### WARNING: archive_viewer gave no output; cannot verify bundle contents" >&2
+else
+  for m in $EXTRA_MODULES; do
+    if [ ! -f "$m.py" ]; then
+      echo "### note: $m.py not in this checkout; skipping its bundle assertion"
+      continue
+    fi
+    if printf '%s\n' "$listing" | grep -qE "^[[:space:]]*$m\$"; then
+      echo "### bundle contains $m"
+    else
+      echo "### ERROR: $m is missing from dist/$NAME" >&2
+      exit 1
+    fi
+  done
+fi
+
 echo "### built: $ROOT/dist/$NAME  ($(stat -c %s "dist/$NAME" 2>/dev/null || stat -f %z "dist/$NAME") bytes)"
