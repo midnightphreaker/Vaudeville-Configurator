@@ -1,9 +1,9 @@
 """Who the 26 LLMUnity agents in Vaudeville actually are, and where they live.
 
 This module is pure data derived from the shipped game files (Steam AppID 2240920,
-Unity 2022.3.62f2, IL2CPP).  It exists so the configurator's UI can offer a
-friendly "which characters am I editing?" dropdown instead of one flat list of
-26 anonymous agents.
+Unity 2022.3.62f2, IL2CPP).  It exists so the configurator's UI can scope
+word-choice (sampling) changes to a group of characters instead of one flat
+list of 26 agents.
 
 Everything below was read out of the game, not guessed -- see ``EVIDENCE``.
 
@@ -21,12 +21,22 @@ from __future__ import annotations
 #: file list of its own) and is NOT a value in ``GROUP_OF_FILE``.
 ALL_KEY = "all"
 
+#: Dropdown text for ``ALL_KEY``.  Exported so the UI and the help text cannot
+#: drift apart (``FRIENDLY_GROUP_INTRO`` refers to this entry by name).
+ALL_LABEL: str = "All characters (26)"
+
 
 # --------------------------------------------------------------------------- #
 # the cast, grouped the way the game itself groups it: one investigation
 # location per group, plus one group for the Story Editor / Workshop cast.
 #
 # Order = Unity scene build order (level4 .. level13), Workshop last.
+#
+# ``characters`` is DISPLAY TEXT ONLY.  It is not ordered like the agent blobs
+# inside ``files`` (the campaign groups happen to coincide; the Workshop group
+# does not -- its list is in game-code archetype order, its blobs are in file
+# order) and there is deliberately no per-character -> blob mapping here.
+# Always patch at GROUP scope: every agent blob found in the group's ``files``.
 # --------------------------------------------------------------------------- #
 
 CAST_GROUPS: list[dict] = [
@@ -91,7 +101,7 @@ CAST_GROUPS: list[dict] = [
         "label": "Coral bar (1 character)",
         "files": ["level12"],
         "characters": ["Ingrid"],
-        "note": "The barmaid on shift at the Coral, the town's bar.",
+        "note": "The young woman you meet at the Coral, the town's bar.",
     },
     {
         "key": "library",
@@ -102,7 +112,7 @@ CAST_GROUPS: list[dict] = [
     },
     {
         "key": "workshop",
-        "label": "Workshop stories - your custom stories (13 characters)",
+        "label": "Workshop / Story Editor roles (13 characters)",
         "files": ["sharedassets18.assets"],
         "characters": [
             "Police Chief",
@@ -121,7 +131,8 @@ CAST_GROUPS: list[dict] = [
         ],
         "note": (
             "The Story Editor's 13 reusable roles, standing in for the same cast "
-            "when you write and play your own Workshop stories."
+            "when you write and play your own Workshop stories. One shared set: "
+            "the same thirteen roles are used by every custom story you play."
         ),
     },
 ]
@@ -162,6 +173,17 @@ GROUP_OF_FILE: dict[str, str] = {
     "level13.assets": "library",
 }
 
+#: The 11 asset files that really exist on disk and really carry agents.
+#: Iterate THIS (or ``CAST_GROUPS[*]["files"]``) when scoping a patch -- not
+#: ``GROUP_OF_FILE``, whose extra "levelN.assets" keys are lookup aliases for
+#: Unity's build-settings path names and do not exist in the install.
+CANONICAL_FILES: list[str] = [f for g in CAST_GROUPS for f in g["files"]]
+
+
+def group_of(name: str) -> str | None:
+    """Resolve an asset filename to a cast group key, alias-tolerant."""
+    return GROUP_OF_FILE.get(name) or GROUP_OF_FILE.get(name.removesuffix(".assets"))
+
 
 # --------------------------------------------------------------------------- #
 # the "levels are difficulty" theory: refuted.
@@ -174,6 +196,25 @@ DIFFICULTY_SCALE: list[tuple[int, str]] | None = None
 
 
 # --------------------------------------------------------------------------- #
+# persona / system prompt: NOT editable from here.
+# --------------------------------------------------------------------------- #
+
+#: False because the game rewrites every agent's systemPrompt at load time
+#: (``CharacterPrompt.Awake`` for the campaign cast, ``WS_CharacterPrompt.Init``
+#: for the Workshop cast), so an edit to the serialized string is silently
+#: discarded on the next launch.  UIs should render a note, never a text box.
+SYSTEM_PROMPT_EDITABLE: bool = False
+
+#: Plain-language version of the above, for the UI to show as-is.
+PERSONA_NOTE: str = (
+    "A character's personality comes from the game's own script files, which the "
+    "game reloads every time you play, so it cannot be rewritten here. What you "
+    "can change is how each character answers - how creative, how repetitive, "
+    "how long-winded - and those dials are the same set for every character."
+)
+
+
+# --------------------------------------------------------------------------- #
 # user-facing prose
 # --------------------------------------------------------------------------- #
 
@@ -182,8 +223,9 @@ FRIENDLY_GROUP_INTRO: str = (
     "particular place in town - the police station, the morgue, the circus, the "
     "theatre, the grocery shop, the manor, the country club, the forest, the bar "
     "and the library. This list lets you pick which of them you are tuning. "
-    "Choose a place to change just the people you meet there, or choose "
-    "\u201call\u201d to change everybody at once. The last entry, Workshop stories, "
+    "Choose a place to change just the people you meet there, or choose the "
+    "'All characters' entry to change everybody at once. The last group, "
+    "Workshop / Story Editor roles, "
     "covers the Story Editor: the same thirteen roles reused when you write and "
     "play your own custom mysteries, so tune those separately if you want your "
     "own stories to behave differently from the built-in campaign."
@@ -211,12 +253,18 @@ EVIDENCE: str = (
     "8.1225 Potter, 9.152 Gravesen, 10.152 Biagio, 10.153 Michelle, 11.341 Dada, 12.147 Ingrid, 13.167 Beatrix). "
     "sharedassets18.assets instead holds 13 GameObjects named WS_PoliceChief, WS_PoliceOfficer, WS_Coroner, "
     "WS_Barmaid, WS_Shopkeeper, WS_PoshLady, WS_Nobleman, WS_Librarian, WS_CircusDirector, WS_RichWoman, "
-    "WS_RichMan, WS_Dancer, WS_Hermit, each with a WS_CharacterPrompt (zero serialized bytes, because every "
-    "field is private/[CompilerGenerated] and WS_PlotTrigger is not [Serializable]) plus an LLMAgent, and it is "
-    "referenced only by level18 = Assets/Scenes_WS/WS_Studio.unity, i.e. the Story Editor cast. "
-    "Il2CppDumper's dump.cs confirms the pairing: 'enum Actors' (TypeDefIndex 13015) has 13 members "
+    "WS_RichMan, WS_Dancer, WS_Hermit, each with a WS_CharacterPrompt (zero serialized bytes, because its only public "
+    "field is List<WS_PlotTrigger> and WS_PlotTrigger is not [Serializable], while the remaining fields are "
+    "private/[CompilerGenerated]) plus an LLMAgent, and it is "
+    "referenced only by level18 = Assets/Scenes_WS/WS_Studio.unity, i.e. the Story Editor cast "
+    "(a 14th WS_* GameObject, WS_Location, also lives there but carries no agent, so do not filter "
+    "agents by the WS_ name prefix). "
+    "Il2CppDumper's dump.cs confirms the vocabulary: 'enum Actors' (TypeDefIndex 13015) has 13 members "
     "PoliceChief..Hermit, 'enum Locations' (13018) has 10 members PoliceStation..CountryClub, and "
     "ActorData..cctor (RVA 0x2AD3100) builds 13 Actor objects pairing each archetype with a campaign name "
+    "(both literal sets are present and the in-game roster corroborates 11 of the 13 pairings; "
+    "Barmaid<->Ingrid is inferred from her being the only agent in level12 = Coral, and 'Barmaid' is the "
+    "Story Editor role slot rather than the job her own prompt states, which is dancer) "
     "(Police Chief (M)/Gretzky, Police Officer (M)/Jones, Coroner (F)/Exteberria, Barmaid (F)/Ingrid, "
     "Shopkeeper (M)/Pascal, Posh Lady (F)/Mrs Potter, Nobleman (M)/Count Gravesen, Librarian (F)/Beatrix, "
     "Circus Director (M)/Saxabar, Rich Woman (F)/Michelle, Rich Man (M)/Biagio, Dancer (F)/Marina, "
