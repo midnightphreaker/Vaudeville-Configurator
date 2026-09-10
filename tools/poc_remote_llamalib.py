@@ -15,10 +15,32 @@ This is the exact code path the game uses when a LLMClient/LLMAgent component ha
 
 Run:  python3 poc_remote_llamalib.py --port 13333
 """
-import argparse, ctypes, json, sys, time
+import argparse, ctypes, json, os, sys, time
+from pathlib import Path
 
-NATIVE = ("/home/mp/Workspace/Vaudeville/Vaudeville_Data/StreamingAssets/"
-          "LlamaLib-v2.0.0/linux-x64/native/libllamalib_linux-x64_avx2.so")
+_REL = ("Vaudeville_Data/StreamingAssets/LlamaLib-v2.0.0/linux-x64/native/"
+        "libllamalib_linux-x64_avx2.so")
+
+
+def find_native() -> str:
+    """Locate the game's own libllamalib: $VLM_NATIVE_LIB, then any install we can see."""
+    env = os.environ.get("VLM_NATIVE_LIB")
+    if env:
+        return str(Path(env).expanduser())
+    here = Path(__file__).resolve()
+    roots = [here.parents[2] / "Vaudeville",                       # sibling of the configurator
+             Path.home() / "Workspace/Vaudeville",
+             Path.home() / ".local/share/Steam/steamapps/common/Vaudeville",
+             Path.home() / ".steam/steam/steamapps/common/Vaudeville",
+             Path.cwd()]
+    for r in roots:
+        c = r / _REL
+        if c.is_file():
+            return str(c)
+    return str(roots[0] / _REL)
+
+
+NATIVE = find_native()
 
 ap = argparse.ArgumentParser()
 ap.add_argument("--lib", default=NATIVE)

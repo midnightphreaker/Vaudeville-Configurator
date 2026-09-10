@@ -70,8 +70,8 @@ Vaudville-Configurator/
 | file | path-sensitive? |
 |---|---|
 | `vaudville_configurator.py` | **no** — fully self-contained; the embedded shim is started by re-executing this file (`Path(__file__)`), so it works from any directory and any layout |
-| `tools/*.py` | no (standalone) |
-| `tests/*.sh` | resolve their siblings automatically: `tools/` is found as `$HERE/../tools`, `$HERE/tools` or `$HERE`; `llama-server` is found via `$LLAMA_BIN_DIR`, then `tools/llama.cpp`, then two known fallback paths. Move the whole tree freely. |
+| `tools/*.py` | no (standalone). `poc_remote_llamalib.py` finds the game's own `libllamalib` by itself: `$VLM_NATIVE_LIB`, then `<sibling>/Vaudeville`, `~/Workspace/Vaudeville`, and the two usual Steam library paths. Override per run with `--lib`. |
+| `tests/*.sh` | resolve their siblings automatically: `tools/` is found as `$HERE/../tools`, `$HERE/tools` or `$HERE`; `llama-server` via `$LLAMA_BIN_DIR`, then `tools/llama.cpp`, then two known fallback paths; the test GGUF via `$VLM_TEST_MODEL`, else the first `Qwen3-0.6B-Q4_K_M.gguf` found in a Vaudeville install. They can be run from **any** cwd and in any style — `bash tests/run_e2e_test.sh`, `./tests/run_e2e_test.sh`, `cd tests && ./run_e2e_test.sh`, or by absolute path. Move the whole tree freely. |
 
 Runtime state (created on demand, never next to these files):
 

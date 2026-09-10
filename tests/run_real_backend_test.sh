@@ -2,8 +2,8 @@
 # Real end-to-end test: Vaudeville's own libllamalib  ->  (a) a real llama.cpp server
 #                                                     ->  (b) shim -> llama-server /v1
 set -u
-cd "$(dirname "$0")"
-HERE="$(cd "$(dirname "$0")" && pwd)"
+HERE="$(cd "$(dirname "$0")" && pwd)"   # works from any cwd / any invocation style
+cd "$HERE"
 TOOLS=""
 for d in "$HERE/../tools" "$HERE/tools" "$HERE"; do
   [ -f "$d/llamalib_shim.py" ] && TOOLS="$d" && break
@@ -16,7 +16,18 @@ if [ -z "$BIN" ]; then
   done
 fi
 if [ -z "$BIN" ]; then echo "llama-server not found; set LLAMA_BIN_DIR or put it in <configurator>/tools/llama.cpp" >&2; exit 3; fi
-MODEL=/home/mp/Workspace/Vaudeville/Vaudeville_Data/StreamingAssets/Qwen3-0.6B-Q4_K_M.gguf
+# test GGUF: $VLM_TEST_MODEL, else the first Vaudeville install we can see
+MODEL="${VLM_TEST_MODEL:-}"
+if [ -z "$MODEL" ]; then
+  for c in "$HERE/../../Vaudeville/Vaudeville_Data/StreamingAssets/Qwen3-0.6B-Q4_K_M.gguf" \
+           "$HOME/Workspace/Vaudeville/Vaudeville_Data/StreamingAssets/Qwen3-0.6B-Q4_K_M.gguf" \
+           "$HOME/.local/share/Steam/steamapps/common/Vaudeville/Vaudeville_Data/StreamingAssets/Qwen3-0.6B-Q4_K_M.gguf" \
+           "$HOME/.steam/steam/steamapps/common/Vaudeville/Vaudeville_Data/StreamingAssets/Qwen3-0.6B-Q4_K_M.gguf"; do
+    [ -f "$c" ] && MODEL="$c" && break
+  done
+fi
+if [ -z "$MODEL" ]; then echo "test GGUF not found; set VLM_TEST_MODEL=/path/to/model.gguf" >&2; exit 3; fi
+echo "### model: $MODEL"
 mkdir -p logs
 "$BIN/llama-server" -m "$MODEL" --host 127.0.0.1 --port 8080 -c 4096 -ngl 0 \
     --jinja > logs/llama-server.log 2>&1 &
