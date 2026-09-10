@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+# Build the single-file executable for the CURRENT platform (Linux/macOS).
+# Windows: use tools\build_package.cmd on a Windows machine (no cross-compile).
+#
+#   bash tools/build_package.sh            -> dist/vaudville-configurator
+#   NAME=myname bash tools/build_package.sh
+set -euo pipefail
+HERE="$(cd "$(dirname "$0")" && pwd)"
+ROOT="$(cd "$HERE/.." && pwd)"
+cd "$ROOT"
+NAME="${NAME:-vaudville-configurator}"
+VENV="${VENV:-.venv-build}"          # build-only venv; never touches system python
+if [ ! -x "$VENV/bin/pyinstaller" ]; then
+  python3 -m venv "$VENV"
+  "$VENV/bin/python" -m pip install --upgrade pip
+  "$VENV/bin/python" -m pip install pyinstaller
+fi
+"$VENV/bin/pyinstaller" --onefile --clean --name "$NAME" vaudville_configurator.py
+echo "### built: $ROOT/dist/$NAME  ($(stat -c %s "dist/$NAME" 2>/dev/null || stat -f %z "dist/$NAME") bytes)"

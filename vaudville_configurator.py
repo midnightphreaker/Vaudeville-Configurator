@@ -235,6 +235,14 @@ def align4(n: int) -> int:
     return (n + 3) & ~3
 
 
+def _shim_argv(cfg_path: Path) -> list[str]:
+    """Command line for the shim child. A packaged (frozen) build re-executes the
+    executable itself; a source run re-executes this file with the interpreter."""
+    if getattr(sys, "frozen", False):
+        return [sys.executable, "--shim", "--config", str(cfg_path)]
+    return [sys.executable, str(Path(__file__).resolve()), "--shim", "--config", str(cfg_path)]
+
+
 def _detached_kwargs() -> dict:
     """Detach a child process on both platforms."""
     if IS_WINDOWS:
@@ -1588,7 +1596,7 @@ class ShimProcess:
         logfh.flush()
         try:
             self.proc = subprocess.Popen(
-                [sys.executable, str(Path(__file__).resolve()), "--shim", "--config", str(cfg_path)],
+                _shim_argv(cfg_path),
                 stdout=logfh, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
                 env=env, cwd=str(Path.home()), **_detached_kwargs())
         except OSError as exc:
@@ -3279,7 +3287,8 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv=None) -> int:
     args = build_parser().parse_args(argv)
     if args.version:
-        print(f"{APP_NAME} {APP_VERSION}")
+        tag = " (single-file build)" if getattr(sys, "frozen", False) else ""
+        print(f"{APP_NAME} {APP_VERSION}{tag}")
         return 0
     if args.shim:
         cfg = {}

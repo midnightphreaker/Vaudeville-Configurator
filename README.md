@@ -137,7 +137,9 @@ Vaudville-Configurator/
 │   ├── poc_remote_llamalib.py    ctypes PoC: drives the game's own libllamalib in remote mode
 │   ├── mock_openai_backend.py    fake OpenAI-compatible backend used by the tests
 │   ├── make_screenshots.sh       headless (Xvfb) regeneration of docs/screenshots/
-│   └── vaudville-configurator.cmd  Windows launcher (py -3 …, falls back to python)
+│   ├── vaudville-configurator.cmd  Windows launcher (py -3 …, falls back to python)
+│   ├── build_package.sh            builds the single-file executable (Linux/macOS)
+│   └── build_package.cmd           builds the single-file .exe (on Windows)
 │   └── llama.cpp -> …            symlink to a downloaded llama.cpp release (for the tests)
 └── tests/
     ├── run_e2e_test.sh           mock backend + shim + PoC (MODE=chat|raw), no llama.cpp needed
@@ -685,7 +687,45 @@ Notes:
 
 ---
 
-## 12. Provenance & legal
+## 12. Packaging — single-file executables
+
+The program is one stdlib-only Python file with the shim embedded, so "packaging" means
+bundling Python + tkinter/Tcl/Tk + that file. PyInstaller `--onefile` does exactly that:
+
+```bash
+bash tools/build_package.sh        # Linux/macOS  -> dist/vaudville-configurator  (~43 MB)
+tools\build_package.cmd            # ON Windows   -> dist\VaudvilleConfigurator.exe
+```
+
+Both scripts create a throw-away `.venv-build/` virtualenv (system Python is never
+touched), install PyInstaller into it, and build. Nothing else is bundled or needed at
+runtime — no game files, no tools/, no tests/.
+
+**Windows caveat:** PyInstaller (and Nuitka) cannot cross-compile. The `.exe` must be
+built *on* Windows (or a Windows CI runner / VM), because it embeds that platform's
+Python and Tcl/Tk binaries. If you have no Windows box: mirror the repo to a CI with a
+`windows-latest` runner, or build once in a Windows VM and share the exe.
+
+Behaviour of a packaged build (verified on Linux, see below):
+
+* `--version` prints `… (single-file build)`; everything else is identical.
+* The shim child **re-executes the executable itself** (`<exe> --shim --config …`) instead
+  of `python3 <file>.py`, detected via `sys.frozen` — so Start/Stop shim works packaged.
+* Config/state/backups stay in the usual per-user dirs (`~/.config|~/.local/…`,
+  `%APPDATA%|%LOCALAPPDATA%\…`), never next to the binary.
+* `--onefile` self-extracts to a temp dir at every start (~1 s); use PyInstaller
+  `--onedir` in the scripts if you prefer instant startup over a single file.
+
+Verified from the frozen Linux binary: `--selftest --live` 51/51, `--gui-check` (tkinter
+bundled correctly), Steam detection, and a full shim cycle (start → test completion →
+stop) with `pgrep` confirming the shim child was the executable itself.
+
+Caveats: unsigned one-file executables trip some AV/Defender heuristics — allow-list the
+binary or sign it; and rebuilding is how you update (the exe embeds its Python version).
+
+---
+
+## 13. Provenance & legal
 
 * Analysis of the shipped build (IL2CPP dump, component decode, prompt extraction, protocol
   reverse-engineering) is documented in
