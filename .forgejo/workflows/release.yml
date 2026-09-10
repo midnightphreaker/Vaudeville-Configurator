@@ -86,6 +86,14 @@ jobs:
           else
             echo "### Xvfb unavailable; skipping --gui-check"
           fi
+      - name: ensure libpython shared library (Debian system python)
+        run: |
+          if command -v apt-get >/dev/null 2>&1; then
+            ver="$(python3 -c 'import sys; print(f"{sys.version_info[0]}.{sys.version_info[1]}")')"
+            apt-get update -qq >/dev/null 2>&1 || true
+            apt-get install -y -qq "libpython${ver}" >/dev/null 2>&1 \
+              || echo "### apt could not install libpython${ver}; continuing anyway"
+          fi
       - name: build single-file binary
         run: bash tools/build_package.sh
       - name: package
