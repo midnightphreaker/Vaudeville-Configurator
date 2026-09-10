@@ -607,7 +607,7 @@ System prompts are 5–8 KB variable-length `TextAsset`s → not resizable in pl
 
 ## 9. Verification status
 
-`--selftest --live` → **50/50 checks passed** (python 3.14, this machine):
+`--selftest --live` → **51/51 checks passed** (50 without `--live`; python 3.14, this machine):
 
 * mode names/order/aliases 3/3 (the three labels, all 18 CLI/config aliases, fallbacks)
 * platform helpers 7/7: per-platform user dirs, the Windows `tasklist` CSV parser
