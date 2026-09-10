@@ -384,16 +384,17 @@ vaudville-configurator --cli apply --mode basic \
 *Goal: the game drives **your own llama.cpp server** (newer llama.cpp, CUDA/Vulkan build,
 another box on the LAN) with no shim in between.*
 
-1. **Start your server** (any build that speaks the llama.cpp-server protocol):
+1. **Run the configurator**
+   ```bash
+   vaudville-configurator
+   ```
+2. **In a second terminal, start your server** (any build that speaks the
+   llama.cpp-server protocol):
    ```bash
    llama-server -m ~/models/Qwen3-8B-Instruct-Q4_K_M.gguf \
                 --host 127.0.0.1 --port 8080 -c 8192 -ngl 99 --jinja
    ```
    Check `curl -s http://127.0.0.1:8080/health` → `200`.
-2. **Run the configurator**
-   ```bash
-   vaudville-configurator
-   ```
 3. **Models tab** — link the **small** `Qwen3-0.6B-Q4_K_M.gguf` as *Main dialogue model*.
    The boot screen waits for the local engine even in remote modes
    ([6.5](#65-the-loading-gate)); the 0.6B model starts in ~1 s.
@@ -436,7 +437,11 @@ vaudville-configurator --cli apply --mode advanced --backend-url http://127.0.0.
 *Goal: any OpenAI-compatible backend — vLLM, Ollama, LM Studio, OpenAI, OpenRouter, TGI —
 local or remote, with API key and TLS if needed.*
 
-1. **Know your endpoint**, e.g.
+1. **Run the configurator**
+   ```bash
+   vaudville-configurator
+   ```
+2. **Know your endpoint**, e.g.
    | backend | BaseURL | model name |
    |---|---|---|
    | vLLM | `http://127.0.0.1:8000/v1` | the served id, e.g. `Qwen/Qwen3-8B` |
@@ -445,10 +450,6 @@ local or remote, with API key and TLS if needed.*
    | llama.cpp server | `http://127.0.0.1:8080/v1` | anything it serves |
    | OpenAI | `https://api.openai.com/v1` | e.g. `gpt-4o-mini` |
    | OpenRouter | `https://openrouter.ai/api/v1` | e.g. `meta-llama/llama-3.1-70b-instruct` |
-2. **Run the configurator**
-   ```bash
-   vaudville-configurator
-   ```
 3. **Models tab** — link the **small** `Qwen3-0.6B-Q4_K_M.gguf` as *Main dialogue model*
    (loading gate, see 5.2 step 3).
 4. **Remote endpoint tab** — select **Remote Mode - OpenAI API Compatible Endpoint**, then:
