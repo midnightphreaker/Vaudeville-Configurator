@@ -4265,10 +4265,20 @@ def gui_main(args) -> int:
                     panel["last"][slot.name] = combo.get()
                     if panel["restrict"] and st["target"] and \
                             not is_llama3_8b_family(Path(st["target"]).name):
-                        warns.append(T("“%s” is not from the %s family, so %s cannot use it — "
-                                       "choose another model here, or use a different setup.")
-                                     % (Path(st["target"]).name, LLAMA3_8B_FAMILY,
-                                        mode_label(MODE_OFF)))
+                        if slot.name == DECK_MODEL_NAME and \
+                                Path(st["target"]).name == DECK_MODEL_NAME:
+                            pass  # the shipped Steam Deck fallback: this setup leaves it alone
+                        elif slot.name == DECK_MODEL_NAME:
+                            warns.append(T("“%s” is linked into the Steam Deck / fallback slot "
+                                           "and is not from the %s family. %s leaves that slot "
+                                           "alone, but the game may still load it on a handheld.")
+                                         % (Path(st["target"]).name, LLAMA3_8B_FAMILY,
+                                            mode_label(MODE_OFF)))
+                        else:
+                            warns.append(T("“%s” is not from the %s family, so %s cannot use it — "
+                                           "choose another model here, or use a different setup.")
+                                         % (Path(st["target"]).name, LLAMA3_8B_FAMILY,
+                                            mode_label(MODE_OFF)))
                 if panel["warn"] is not None:
                     panel["warn"].configure(text="\n".join(warns))
 
