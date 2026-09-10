@@ -13,3 +13,4 @@ build/
 # packaging
 .venv-build/
 *.spec
+.superpowers/
