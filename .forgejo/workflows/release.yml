@@ -234,9 +234,9 @@ jobs:
               sys.exit(f"release assets incomplete: {names}")
           print("### assets verified:", names)
           '
-          curl -sf -X PATCH -H "$auth" -H 'Content-Type: application/json' \
+          curl -sf -X PATCH -H "Authorization: token $TOKEN" -H 'Content-Type: application/json' \
                -d '{"draft": false}' "$api/repos/$repo/releases/${RELEASE_ID}" >/dev/null
-          echo "### release published: $(curl -sf -H "$auth" "$api/repos/$repo/releases/${RELEASE_ID}" | python3 -c 'import json,sys; print(json.load(sys.stdin)["html_url"])')"
+          echo "### release published: $(curl -sf -H "Authorization: token $TOKEN" "$api/repos/$repo/releases/${RELEASE_ID}" | python3 -c 'import json,sys; print(json.load(sys.stdin)["html_url"])')"
 
   bump-commit:
     needs: [gate, publish]
