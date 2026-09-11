@@ -1248,9 +1248,9 @@ def scan_game(game_dir: Path, use_profile: bool = True, progress=None) -> ScanRe
     save_profile(game_dir, new_profile)
     res.duration = time.time() - t0
     if not res.llm:
-        res.notes.append("no LLMUnity.LLM component found — is this the right build?")
+        res.notes.append("no AI engine block found in this folder — is it the Vaudeville install?")
     if not res.agents:
-        res.notes.append("no LLMUnity.LLMAgent components found")
+        res.notes.append("no character settings found in this folder")
     return res
 
 
@@ -2141,10 +2141,10 @@ def string_fits(current: str, wanted: str, field: str = "host") -> tuple[bool, s
         allowed = "only an empty string"
     else:
         allowed = f"{max(0, a - 3)}..{a} characters"
-    return False, (f"{field} {wanted!r} is {len(wanted.encode())} bytes, but the shipped value "
-                   f"{current!r} reserves {a} bytes, so in-place patching allows {allowed}. "
-                   f"Use the built-in shim (which keeps {field}={current!r}) or a BepInEx "
-                   f"plugin for arbitrary values.")
+    return False, (f"The {field} box in the game's files has room for {allowed} (the shipped "
+                   f"value {current!r} reserves {a} bytes), but {wanted!r} is "
+                   f"{len(wanted.encode())} bytes. Remote mode's translator has no such limit "
+                   f"and keeps {field}={current!r} for you.")
 
 
 def split_endpoint(url: str, port_override: int = 0) -> tuple[str, int, str, bool]:
@@ -2187,8 +2187,8 @@ def build_change_set(cfg: dict, res: ScanResult, overrides: dict | None = None,
 
     if mode == "off":
         agent_changes["remote"] = False
-        notes.append(f"{MODE_LABELS[MODE_OFF]}: agents use the in-process llama.cpp "
-                     f"service (nothing leaves the machine)")
+        notes.append(f"{MODE_LABELS[MODE_OFF]}: the cast uses the engine inside the game "
+                     f"(nothing leaves the machine)")
     elif mode == "shim":
         agent_changes["remote"] = True
         wanted_host = cfg.get("agent_host") or cur_host or "localhost"
@@ -2199,12 +2199,13 @@ def build_change_set(cfg: dict, res: ScanResult, overrides: dict | None = None,
         else:
             notes.append("host left unchanged: " + why)
         agent_changes["port"] = int(cfg.get("shim_port", 13333))
-        notes.append(f"{MODE_LABELS[MODE_SHIM]}: agents -> built-in shim on "
-                     f"{wanted_host}:{cfg.get('shim_port',13333)} "
-                     f"-> {cfg.get('backend_url') or '<no BaseURL set>'} "
+        notes.append(f"{MODE_LABELS[MODE_SHIM]}: the cast talks to the built-in translator on "
+                     f"{wanted_host}:{cfg.get('shim_port',13333)}, which forwards every line to "
+                     f"{cfg.get('backend_url') or '<no service address set>'} "
                      f"(model {cfg.get('backend_model') or '-'})")
         if not cfg.get("backend_url"):
-            notes.append("WARNING: no remote BaseURL configured — the shim will fail every request")
+            notes.append("WARNING: no service address set — the translator will fail every "
+                           "request until you give it one")
         if cfg.get("api_key") and not cfg.get("save_api_key"):
             notes.append("API key is held in memory/env only (not written to the config file)")
     elif mode == "direct":
@@ -2216,28 +2217,32 @@ def build_change_set(cfg: dict, res: ScanResult, overrides: dict | None = None,
             problems.append(f"BLOCKED ({MODE_LABELS[MODE_DIRECT]}): no host in the BaseURL")
         if path:
             problems.append(
-                f"BLOCKED ({MODE_LABELS[MODE_DIRECT]}): LlamaLib hands the host string straight to cpp-httplib "
-                "and appends /completion, /health, /apply-template … itself, so a path prefix "
-                f"like {path!r} is not supported. Give host[:port] only, or use the shim.")
+                f"BLOCKED ({MODE_LABELS[MODE_DIRECT]}): the game's built-in engine hands the "
+                "address straight to its own web client and adds /completion, /health, "
+                f"/apply-template … itself, so a path prefix like {path!r} is not supported. "
+                "Give host[:port] only, or use Remote mode, whose translator holds the full "
+                "address for you.")
         if tls:
             problems.append(
-                f"BLOCKED ({MODE_LABELS[MODE_DIRECT]}): TLS needs the literal string 'https://<host>' inside the "
-                "host field (LlamaLib strips the scheme and switches to SSLClient). That is 8 "
-                "extra bytes and cannot fit the in-place 'localhost' slot — use the shim "
-                "(which can do TLS for you) or a BepInEx plugin.")
+                f"BLOCKED ({MODE_LABELS[MODE_DIRECT]}): a padlocked https address needs the "
+                "literal text 'https://<host>' inside the address field (the game's engine "
+                "strips the scheme and switches to its secure client). That is 8 extra bytes "
+                "and cannot fit the reserved 'localhost' space — use Remote mode, whose "
+                "translator can do the padlock for you.")
         ok, why = host_fits(cur_host, host)
         if not ok:
             problems.append(f"BLOCKED ({MODE_LABELS[MODE_DIRECT]}): " + why)
         if problems:
             notes.extend(problems)
-            notes.append(f"Switch to '{MODE_LABELS[MODE_SHIM]}' — it keeps host=localhost "
-                         f"and holds the real BaseURL / model / API key itself.")
+            notes.append(f"Switch to '{MODE_LABELS[MODE_SHIM]}' — it keeps the game pointing "
+                         f"at this computer and holds the real address, model name and "
+                         f"password itself.")
         else:
             agent_changes["host"] = host
             agent_changes["port"] = port
-            notes.append(f"{MODE_LABELS[MODE_DIRECT]}: agents -> http://{host}:{port} directly "
-                         f"(the server must speak the "
-                         f"llama.cpp protocol: /health /apply-template /completion /tokenize)")
+            notes.append(f"{MODE_LABELS[MODE_DIRECT]}: the cast talks straight to "
+                         f"http://{host}:{port} (that server must speak the llama.cpp "
+                         f"protocol: /health /apply-template /completion /tokenize)")
         if cfg.get("api_key"):
             cur_key = res.agents[0].values.get("APIKey", "") if res.agents else ""
             okk, whyk = string_fits(cur_key, cfg["api_key"], "APIKey")
@@ -2283,9 +2288,9 @@ def build_change_set(cfg: dict, res: ScanResult, overrides: dict | None = None,
             notes.append(f"unknown parameter {key!r} ignored")
 
     if agent_changes.get("remote") and mode in ("shim", "direct"):
-        notes.append("NOTE: the boot screen waits for the LOCAL model to start "
-                     "(OffWorldInit.CheckLoading -> LLM.started), so keep a small GGUF "
-                     "linked as the main model, or the loading screen will hang.")
+        notes.append("NOTE: the loading screen waits for the on-machine model to start, so "
+                     "keep a small model file linked as the main model or the boot screen "
+                     "will hang.")
     return agent_changes, llm_changes, notes
 
 
@@ -2433,6 +2438,155 @@ def free_port(host: str = "127.0.0.1") -> int:
 # --------------------------------------------------------------------------- #
 # self-test
 # --------------------------------------------------------------------------- #
+# --- self-test helpers (used only by selftest() and the checks it runs) ----- #
+# The three setup cards exactly as the project owner mandated them.  This is a
+# deliberate SECOND copy of the text: vaudville_help.py holds what the UI
+# renders, this holds what was asked for, and the self-test fails the moment
+# they drift — including a "helpful" fix of the upstream `communcation`
+# spelling or of the two mandated double spaces.
+MODE_CARD_COPY = {
+    MODE_OFF: {
+        "title": "Local Mode - Basic",
+        "blurb": ("Vaudville Configurator manages the AI model file for the game.  "
+                  "Download new GGUF Models from Huggingface and let Vaudville "
+                  "Configurator manage everything else!"),
+        "difficulty": "Low",
+        "restrictions": ("GGUF File, must be related to or created from "
+                         "`Meta-Llama-3-8B-Instruct` (not 3.1 or later) only!"),
+    },
+    MODE_DIRECT: {
+        "title": "Local Mode - Advanced",
+        "blurb": ("Vaudville Configurator replaces the outdated and hardcoded "
+                  "Llamalib built into the game, with the latest llama.cpp release "
+                  "and allows you to select any GGUF model and tune all the "
+                  "parameters!"),
+        "difficulty": "Moderate",
+        "restrictions": ("Must be a GGUF File compatible with latest llama.cpp, "
+                         "must fit into local computer VRAM along with game!"),
+    },
+    MODE_SHIM: {
+        "title": "Remote Mode - OpenAI API Compatible Endpoint",
+        "blurb": ("Vaudville Configurator intercepts the communcation with the "
+                  "outdated and hardcoded Llamalib built into the game, and lets "
+                  "you enter any Local or Remote OpenAI Compatible API Endpoint.  "
+                  "vLLM / SGLang / Llama.cpp / ExLlamaV3 / Ollama / OpenAI / Custom"),
+        "difficulty": "Moderate to Difficult depending on Self Hosting or Remote API.",
+        "restrictions": "Only that the endpoint must support OpenAI API Chat Completions!",
+    },
+}
+# the setting grids the GUI actually lays out, and the component each belongs to
+GUI_FIELD_GRIDS = (("AGENT", CHARACTER_FIELDS), ("LLM", ENGINE_FIELDS))
+# what every SETTING_HELP entry has to carry for a tooltip to be useful
+HELP_ENTRY_KEYS = ("what", "does", "why_change", "why_not", "range", "tips")
+# the asset files that hold characters (level4..level13 = the 10 locations,
+# sharedassets18.assets = the Story Editor / Workshop roles)
+EXPECTED_AGENT_FILES = [f"level{n}" for n in range(4, 14)] + ["sharedassets18.assets"]
+# tab names the pre-rebuild GUI used, which must keep working
+LEGACY_TAB_NAMES = {"game": "home", "start": "home", "welcome": "home",
+                    "off": "basic", "models": "basic", "model": "basic",
+                    "direct": "advanced", "shim": "remote", "openai": "remote",
+                    "parameters": "characters", "params": "characters",
+                    "cast": "characters", "restore": "backup", "backups": "backup"}
+
+
+def _st_visible_tabs(mode) -> list:
+    """The tab set the notebook shows: Home alone until a setup has been
+    confirmed on the Home page, then Home + that setup + Characters + Backup."""
+    if mode not in TAB_OF_MODE:
+        return ["home"]
+    return ["home", TAB_OF_MODE[mode], "characters", "backup"]
+
+
+def _st_probe_argv(extra: list) -> list:
+    """Command line for a child run of this same program (frozen-aware)."""
+    if getattr(sys, "frozen", False):
+        return [sys.executable, *extra]
+    return [sys.executable, str(Path(__file__).resolve()), *extra]
+
+
+def _st_gui_check(config: dict, tab: str = ""):
+    """Build the real GUI through the existing withdrawn `--gui-check` path and
+    report (tabs in the notebook, tab frames built).
+
+    `--gui-check` withdraws the window before it is ever mapped, so nothing
+    appears on anybody's desktop, and it skips the game scan.  The child runs in
+    a throwaway XDG home, so the caller's own config is neither read nor
+    written.  Returns None when it cannot run here (no display, no tkinter,
+    broken build); the caller then skips the section instead of failing it."""
+    import tempfile
+    try:
+        with tempfile.TemporaryDirectory(prefix="vaudville-selftest-ui-") as td:
+            env = dict(os.environ)
+            env["XDG_CONFIG_HOME"] = str(Path(td) / "config")
+            env["XDG_DATA_HOME"] = str(Path(td) / "data")
+            env["XDG_STATE_HOME"] = str(Path(td) / "state")
+            for var in ("XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME"):
+                Path(env[var]).mkdir(parents=True, exist_ok=True)
+            cdir = Path(env["XDG_CONFIG_HOME"]) / APP_SLUG
+            cdir.mkdir(parents=True, exist_ok=True)
+            (cdir / "config.json").write_text(json.dumps(config), encoding="utf-8")
+            argv = ["--gui-check"] + (["--tab", tab] if tab else [])
+            proc = subprocess.run(_st_probe_argv(argv), env=env, capture_output=True,
+                                  text=True, timeout=60)
+            out = (proc.stdout or "") + "\n" + (proc.stderr or "")
+            m = re.search(r"GUI built OK \(withdrawn\); tabs: (\d+) \(built: (\d+)", out)
+            return (int(m.group(1)), int(m.group(2))) if m else None
+    except Exception:                                          # noqa: BLE001
+        return None
+
+
+def _st_deck_exemption():
+    """Does the Basic-mode model panel leave the shipped Steam Deck file alone?
+
+    The rule lives inside gui_main's refresh_models(), which needs a Tk root, so
+    the shipped condition is lifted out of the source and evaluated here against
+    three slot/target combinations.  Returns (ok, detail), or None when the
+    source cannot be read (a frozen single-file build ships no .py)."""
+    import inspect
+    from types import SimpleNamespace
+    try:
+        src = inspect.getsource(gui_main)
+    except Exception:                                          # noqa: BLE001
+        return None
+    m = re.search(r"if\s+(slot\.name == DECK_MODEL_NAME[\s\S]*?):[ \t]*\n[ \t]*pass", src)
+    if not m:
+        return (False, "no Steam Deck exemption left in gui_main — if refresh_models() was "
+                       "refactored, update _st_deck_exemption() in the self-test")
+    cond = " ".join(re.sub(r"\\\s+", " ", m.group(1)).split())
+
+    def warns(slot_name: str, target: str) -> bool:
+        """True when the restricted (Basic) panel would flag this slot."""
+        if is_llama3_8b_family(Path(target).name):
+            return False                     # in-family, never a warning
+        ns = {"slot": SimpleNamespace(name=slot_name), "st": {"target": target},
+              "Path": Path, "DECK_MODEL_NAME": DECK_MODEL_NAME}
+        try:
+            exempt = bool(eval(cond, {"__builtins__": {}}, ns))   # noqa: S307
+        except Exception:                                        # noqa: BLE001
+            return True                      # fail safe: warn
+        return not exempt
+
+    cases = [(DECK_MODEL_NAME, f"/models/{DECK_MODEL_NAME}", False,
+              "the shipped deck file must stay unflagged"),
+             (DECK_MODEL_NAME, "/models/Mistral-7B-Instruct-v0.3.gguf", True,
+              "a different file linked into the deck slot must still warn"),
+             (PRIMARY_MODEL_NAME, "/models/Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf", True,
+              "Llama-3.1 in the main slot must still warn")]
+    bad = [why for name, tgt, want, why in cases if warns(name, tgt) != want]
+    return (not bad, ("; ".join(bad) if bad
+                      else f"{len(cases)} slot/target cases against `{cond}`"))
+
+
+def _st_agent_file_counts(res) -> dict:
+    """Agent blobs per asset file name, exactly as the scanner saw them."""
+    counts: dict = {}
+    for blob in getattr(res, "agents", []):
+        name = getattr(getattr(blob, "path", None), "name", "") or ""
+        if name:
+            counts[name] = counts.get(name, 0) + 1
+    return counts
+
+
 def selftest(game_dir: Path | None, live: bool, verbose: bool = True,
              ci: bool = False) -> int:
     results: list[tuple[bool, str]] = []
@@ -2496,6 +2650,234 @@ def selftest(game_dir: Path | None, live: bool, verbose: bool = True,
         check(vfile.read_text().strip() == APP_VERSION,
               f"VERSION file ({vfile.read_text().strip()}) matches APP_VERSION ({APP_VERSION})")
 
+    print("[0c] sibling data modules (vaudville_cast / vaudville_help)")
+    frozen = bool(getattr(sys, "frozen", False))
+    where = "frozen single-file build" if frozen else "source run"
+    check(cast is not None, f"vaudville_cast imported and in use ({where})")
+    check(helpmod is not None, f"vaudville_help imported and in use ({where})")
+    import importlib.util
+    specs = {}
+    for name in ("vaudville_cast", "vaudville_help"):
+        try:
+            specs[name] = importlib.util.find_spec(name) is not None
+        except Exception:                                      # noqa: BLE001
+            specs[name] = False
+    check(all(specs.values()),
+          "both modules are findable by the import machinery, so a bundle that "
+          f"dropped them would fail here instead of degrading silently ({specs})")
+    cast_names = ("ALL_KEY", "ALL_LABEL", "CAST_GROUPS", "GROUP_OF_FILE", "CANONICAL_FILES",
+                  "group_of", "LEVELS_ARE_DIFFICULTY", "DIFFICULTY_SCALE",
+                  "SYSTEM_PROMPT_EDITABLE", "PERSONA_NOTE", "FRIENDLY_GROUP_INTRO", "EVIDENCE")
+    help_names = ("MODE_CARDS", "TERMS", "GROUP_HELP", "SETTING_HELP", "MODEL_HELP",
+                  "SHIM_HELP", "CREDIT", "GITHUB_URL")
+    gaps = [n for n in cast_names if cast is None or not hasattr(cast, n)]
+    check(not gaps, f"vaudville_cast exports all {len(cast_names)} contract names"
+                    + (f" — missing: {gaps}" if gaps else ""))
+    gaps = [n for n in help_names if helpmod is None or not hasattr(helpmod, n)]
+    check(not gaps, f"vaudville_help exports all {len(help_names)} contract names"
+                    + (f" — missing: {gaps}" if gaps else ""))
+    raw_cards = getattr(helpmod, "MODE_CARDS", None) or {}
+    check(isinstance(raw_cards, dict) and set(raw_cards) == set(MODE_ORDER)
+          and all(isinstance(raw_cards.get(k), dict)
+                  and all(str(raw_cards[k].get(f) or "").strip()
+                          for f in ("title", "blurb", "difficulty", "restrictions"))
+                  for k in MODE_ORDER),
+          f"MODE_CARDS keys are exactly {sorted(set(MODE_ORDER))} and every card carries "
+          "title/blurb/difficulty/restrictions")
+    raw_help = getattr(helpmod, "SETTING_HELP", None) or {}
+    check(isinstance(raw_help, dict) and len(raw_help) >= 40,
+          f"SETTING_HELP is non-empty ({len(raw_help)} entries)")
+    check(len(TERMS) == len(_TERM_RES) > 0 and T("LLMAgent") == "character agents",
+          f"TERMS compiled ({len(_TERM_RES)} rules) and applied to this file's own strings")
+
+    print("[0d] the three setup cards are byte-identical to the mandated copy")
+    check(set(MODE_CARDS) == set(MODE_ORDER)
+          and all(set(MODE_CARDS[k]) >= {"key", "title", "blurb", "difficulty", "restrictions"}
+                  for k in MODE_ORDER),
+          f"the GUI renders {len(MODE_CARDS)} cards, each with "
+          "key/title/blurb/difficulty/restrictions")
+    for key in MODE_ORDER:
+        card, want = MODE_CARDS[key], MODE_CARD_COPY[key]
+        diff = [f for f in ("title", "blurb", "difficulty", "restrictions")
+                if str(card.get(f)) != want[f]]
+        check(not diff, f"{key!r} card matches the mandated copy verbatim"
+                        + (f" — differs in: {diff}" if diff else ""))
+    check(all(str(MODE_CARDS[k].get("title")) == MODE_LABELS[k] for k in MODE_ORDER),
+          "card titles are exactly the three mode labels")
+    shim_blurb = str(MODE_CARDS[MODE_SHIM].get("blurb"))
+    off_blurb = str(MODE_CARDS[MODE_OFF].get("blurb"))
+    check(shim_blurb.count("communcation") == 1 and "communication" not in shim_blurb,
+          "the upstream `communcation` spelling is preserved — do not 'fix' it")
+    check("game.  Download" in off_blurb and "Endpoint.  vLLM" in shim_blurb,
+          "both mandated double spaces survived (game.<2sp>Download, Endpoint.<2sp>vLLM)")
+
+    print("[0e] help covers every field the GUI lays out")
+    agent_names = [n for n, _ in AGENT_LAYOUT]
+    llm_names = [n for n, _ in LLM_LAYOUT]
+    union = set(agent_names) | set(llm_names)
+    check(set(raw_help) == union,
+          f"SETTING_HELP keys == AGENT_LAYOUT | LLM_LAYOUT names ({len(union)}); "
+          f"missing={sorted(union - set(raw_help))} extra={sorted(set(raw_help) - union)}")
+    check(set(SETTING_HELP) == union,
+          f"the merged SETTING_HELP the GUI reads has the same {len(union)} keys")
+    thin = {n: [k for k in HELP_ENTRY_KEYS if not raw_help.get(n, {}).get(k)]
+            for n in raw_help
+            if any(not raw_help[n].get(k) for k in HELP_ENTRY_KEYS)}
+    check(not thin, "every entry has all of " + "/".join(HELP_ENTRY_KEYS)
+                    + (f" — thin: {thin}" if thin else ""))
+    few = sorted(n for n in raw_help if len(raw_help[n].get("tips") or []) < 2)
+    check(not few, "every entry carries at least 2 tips"
+                   + (f" — 0 or 1 tip: {few}" if few else ""))
+    laid_out = [n for _kind, fields in GUI_FIELD_GRIDS for n in fields]
+    gaps = [n for n in laid_out if not str(setting_tip(n)).strip()]
+    check(set(laid_out) <= union and not gaps,
+          f"all {len(laid_out)} grid fields "
+          f"({' + '.join(f'{len(f)} {k.lower()}' for k, f in GUI_FIELD_GRIDS)}) have a help "
+          f"entry and render a tooltip" + (f" — gaps: {gaps}" if gaps else ""))
+    check(set(CHARACTER_FIELDS) <= set(agent_names) and set(ENGINE_FIELDS) <= set(llm_names)
+          and set(ENDPOINT_FIELDS) <= set(agent_names),
+          "every laid-out field is a real serialized field of the component it edits")
+    check(set(STOCK_CHARACTER_VALUES) == set(CHARACTER_FIELDS),
+          f"reset-to-defaults holds a shipped value for exactly the "
+          f"{len(CHARACTER_FIELDS)} character grid fields")
+
+    print("[0f] cast data and group-scoped patching")
+    if cast is None:
+        check(False, "cast checks skipped — vaudville_cast did not import")
+    else:
+        from types import SimpleNamespace
+        groups = cast_groups()
+        keys = [str(g.get("key")) for g in groups]
+        check(len(groups) == len(set(keys)) == 11,
+              f"{len(groups)} cast groups, unique keys: {', '.join(keys)}")
+        check(all_group_key() not in keys
+              and all_group_key() == str(getattr(cast, "ALL_KEY", "")),
+              f"the {all_group_key()!r} sentinel is a dropdown value, not a group")
+        check(all(str(g.get("label", "")).strip() and g.get("files") and g.get("characters")
+                  and str(g.get("note", "")).strip() for g in groups),
+              "every group has a label, a non-empty file list, characters and a note")
+        total = sum(len(g.get("characters") or []) for g in groups)
+        check(total == 26, f"the groups' character lists sum to 26 (got {total})")
+        canon = list(getattr(cast, "CANONICAL_FILES", []) or [])
+        check(canon == [f for g in groups for f in g["files"]]
+              and len(set(canon)) == len(canon) == len(EXPECTED_AGENT_FILES),
+              f"CANONICAL_FILES is exactly the flattened group file lists "
+              f"({len(canon)} unique) — the list a patch must be scoped to")
+        table = dict(getattr(cast, "GROUP_OF_FILE", {}) or {})
+        check(all(f in table for f in canon) and set(table.values()) <= set(keys)
+              and all_group_key() not in table.values(),
+              f"GROUP_OF_FILE maps all {len(canon)} real files onto group keys "
+              f"({len(table)} entries, the rest being lookup aliases)")
+        alias_bad = [f"level{n}" for n in range(4, 14)
+                     if cast.group_of(f"level{n}.assets") != cast.group_of(f"level{n}")]
+        check(not alias_bad and cast.group_of("sharedassets18.assets") == "workshop"
+              and cast.group_of("level3") is None,
+              "group_of() is alias-tolerant and returns None for an unknown file"
+              + (f" — broken aliases: {alias_bad}" if alias_bad else ""))
+        scope_bad = [k for k in keys
+                     if group_files(k) != {str(f) for g in groups if str(g["key"]) == k
+                                           for f in g["files"]}]
+        check(not scope_bad,
+              "group_files() — what a patch is scoped to — comes from CAST_GROUPS[*]['files']"
+              + (f" — mismatched: {scope_bad}" if scope_bad else ""))
+        check(group_files(None) == set() and group_files(all_group_key()) == set()
+              and all(normalize_group(a) is None
+                      for a in (None, "", "all", "ALL", " everyone ", "everybody")),
+              "'every character' resolves to no file list, so it can never scope a patch "
+              "down to nothing")
+        choices = group_choices()
+        check(choices[0] == (all_group_key(), "All characters")
+              and [k for k, _ in choices[1:]] == keys
+              and all(normalize_group(k) == k for k, _ in choices[1:])
+              and group_label(all_group_key()) == "All characters",
+              f"the dropdown lists 'All characters' first, then the {len(keys)} groups in game "
+              "order, and every entry maps back to a real group key")
+        check(all(group_known(k) for k in keys) and group_known(None)
+              and not group_known("not_a_group"),
+              "group_known() accepts the 11 real keys and 'all', rejects anything else")
+        check(len(group_characters(None)) == 26
+              and sum(len(group_characters(k)) for k in keys) == 26,
+              "group_characters() names 26 characters for 'all' and 26 across the groups")
+        entry_keys = {k for g in groups for k in g}
+        check(entry_keys == {"key", "label", "files", "characters", "note"},
+              f"groups carry display data only {sorted(entry_keys)} — no per-character blob "
+              "index exists, so patching has to stay group-scoped")
+        label_bad = [g["key"] for g in groups
+                     if not re.search(r"\(%d character" % len(g["characters"]),
+                                      str(g["label"]))]
+        check(not label_bad, "each group's label states its own character count"
+                             + (f" — wrong: {label_bad}" if label_bad else ""))
+        check(blob_in_group(SimpleNamespace(path=Path("level4")), "police_station")
+              and not blob_in_group(SimpleNamespace(path=Path("level4")), "morgue")
+              and blob_in_group(SimpleNamespace(path=Path("level4.assets")), "police_station")
+              and blob_in_group(SimpleNamespace(path=Path("sharedassets18.assets")), "workshop")
+              and blob_in_group(SimpleNamespace(path=Path("level4")), None)
+              and blob_in_group(SimpleNamespace(path=Path("level4")), "not_a_group"),
+              "blob_in_group() is file-scoped, alias-tolerant and fails safe (True) for "
+              "'all' and for an unknown group")
+
+    print("[0g] refuted theories stay refuted")
+    check(getattr(cast, "LEVELS_ARE_DIFFICULTY", None) is False,
+          "LEVELS_ARE_DIFFICULTY is False — level4..level13 are locations, not difficulty 0..25")
+    check(getattr(cast, "DIFFICULTY_SCALE", "missing") is None,
+          "DIFFICULTY_SCALE is None — the game has no difficulty scale to offer")
+    check(getattr(cast, "SYSTEM_PROMPT_EDITABLE", None) is False,
+          "SYSTEM_PROMPT_EDITABLE is False — CharacterPrompt.Awake overwrites the agent "
+          "system prompt at load time")
+    check("systemPrompt" in INERT_FIELDS and "advancedOptions" in INERT_FIELDS,
+          f"the GUI lists {sorted(INERT_FIELDS)} as not editable")
+    check(bool(str(getattr(cast, "PERSONA_NOTE", "")).strip()) and bool(evidence_text().strip()),
+          "the cast module says why personas are not editable, and backs it with evidence")
+
+    print("[0h] Basic-mode model family check")
+    check(is_llama3_8b_family(PRIMARY_MODEL_NAME),
+          f"the shipped main model {PRIMARY_MODEL_NAME} IS {LLAMA3_8B_FAMILY} family")
+    check(not is_llama3_8b_family(DECK_MODEL_NAME),
+          f"the shipped Steam Deck fallback {DECK_MODEL_NAME} is NOT that family, so it has "
+          "to be exempted rather than flagged")
+    check(not is_llama3_8b_family("Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf")
+          and not is_llama3_8b_family("Meta-Llama-3.2-3B-Instruct-Q4_K_M.gguf")
+          and is_llama3_8b_family("meta-llama-3-8b-instruct-q5_k_m.gguf"),
+          "the family check rejects Llama-3.1/3.2 and is case/punctuation tolerant for 3-8B")
+    check([s.name for s in model_slots()] == [PRIMARY_MODEL_NAME, DECK_MODEL_NAME],
+          "the two model slots are the two file names the build hard-codes")
+    exempt = _st_deck_exemption()
+    if exempt is None:
+        check(True, "Basic-mode warning logic not inspectable here (a frozen build ships no "
+                    "source); --gui-check builds that panel instead")
+    else:
+        check(exempt[0], f"the Basic-mode panel leaves the shipped deck file alone — "
+                         f"{exempt[1]}")
+
+    print("[0i] tabs, aliases and branding")
+    check(TAB_ORDER == ("home", "basic", "advanced", "remote", "characters", "backup"),
+          "tab order: " + " | ".join(TAB_ORDER))
+    check(set(TAB_ALIASES.values()) == set(TAB_ORDER)
+          and all(normalize_tab(a) == k for a, k in TAB_ALIASES.items()),
+          f"all {len(TAB_ALIASES)} tab aliases normalize onto the {len(TAB_ORDER)} real tabs")
+    check(all(normalize_tab(a) == k for a, k in LEGACY_TAB_NAMES.items())
+          and normalize_tab("nope") == "" and normalize_tab(None) == "",
+          f"the {len(LEGACY_TAB_NAMES)} pre-rebuild tab names still land on the new tabs")
+    check(TAB_OF_MODE == {MODE_OFF: "basic", MODE_DIRECT: "advanced", MODE_SHIM: "remote"}
+          and MODE_OF_TAB == {v: k for k, v in TAB_OF_MODE.items()},
+          "each mode owns exactly one tab: "
+          + ", ".join(f"{m}->{TAB_OF_MODE[m]}" for m in MODE_ORDER))
+    check(_st_visible_tabs(None) == ["home"]
+          and all(_st_visible_tabs(m) == ["home", TAB_OF_MODE[m], "characters", "backup"]
+                  for m in MODE_ORDER),
+          "no setup confirmed -> Home only; confirmed -> Home + that setup + Characters + Backup")
+    check(len({tab_title(k) for k in TAB_ORDER}) == len(TAB_ORDER)
+          and all(tab_title(k).strip() for k in TAB_ORDER)
+          and all(tab_title(TAB_OF_MODE[m]).strip() == MODE_LABELS[m].strip()
+                  for m in MODE_ORDER),
+          "every tab has its own non-empty title and the mode tabs use the mode label")
+    check(CREDIT == "MidnightPhreaker + Qwen", f"CREDIT = {CREDIT!r}")
+    check(GITHUB_URL == "https://github.com/MidnightPhreaker/Vaudville-Configurator",
+          f"GITHUB_URL = {GITHUB_URL!r}")
+    check(CREDIT == str(getattr(helpmod, "CREDIT", ""))
+          and GITHUB_URL == str(getattr(helpmod, "GITHUB_URL", "")),
+          "the credit and project link come from vaudville_help, not from the local fallback")
+
     print("[1] ThinkStripper")
     cases = [(["<think>secret</think>Hi there!"], "Hi there!"),
              (["<thi", "nk>sec", "ret</thi", "nk>Hi"], "Hi"),
@@ -2531,6 +2913,23 @@ def selftest(game_dir: Path | None, live: bool, verbose: bool = True,
     if gd is None:
         print("[3] skipped (CI mode: no game install on this runner)")
         print("[4] skipped (CI mode: no game install on this runner)")
+        print("[4b] cast coverage by name (no install here to scan)")
+        gof = cast.group_of if cast is not None else (lambda _n: None)
+        uncovered = [n for n in EXPECTED_AGENT_FILES if gof(n) is None]
+        check(not uncovered,
+              f"GROUP_OF_FILE covers level4..level13 + sharedassets18.assets by name "
+              f"({len(EXPECTED_AGENT_FILES)} files)"
+              + (f" — missing: {uncovered}" if uncovered else ""))
+        declared = {f: len(g["characters"]) for g in cast_groups() for f in g["files"]}
+        check(sorted(declared) == sorted(EXPECTED_AGENT_FILES)
+              and sum(declared.values()) == 26,
+              f"CAST_GROUPS[*]['files'] is exactly those {len(EXPECTED_AGENT_FILES)} files and "
+              f"their character counts sum to {sum(declared.values())}")
+        alias_bad = [f for f in EXPECTED_AGENT_FILES
+                     if not f.endswith(".assets") and gof(f + ".assets") != gof(f)]
+        check(not alias_bad,
+              "every scene file resolves to the same group with and without the .assets alias"
+              + (f" — broken: {alias_bad}" if alias_bad else ""))
     if gd is not None:
         print(f"[3] component scan of {gd}")
         t0 = time.time()
@@ -2559,6 +2958,24 @@ def selftest(game_dir: Path | None, live: bool, verbose: bool = True,
         check(all(len(e.new) == len(e.old) for e in edits), "every edit is size-preserving")
         for w in warnings:
             check(False, f"planning warning: {w}")
+
+        print("[4b] cast coverage of this install")
+        gof = cast.group_of if cast is not None else (lambda _n: None)
+        counts = _st_agent_file_counts(res)
+        uncovered = sorted(n for n in counts if gof(n) is None)
+        check(bool(counts) and not uncovered,
+              f"GROUP_OF_FILE covers all {len(counts)} agent-bearing files the scanner found "
+              f"({sum(counts.values())} agents)"
+              + (f" — uncovered: {uncovered}" if uncovered else ""))
+        declared = {f: len(g["characters"]) for g in cast_groups() for f in g["files"]}
+        wrong = {n: (c, declared.get(n)) for n, c in counts.items() if declared.get(n) != c}
+        check(set(counts) == set(declared) and not wrong,
+              "agents found per file match each group's character count "
+              f"({', '.join(f'{n}={c}' for n, c in sorted(counts.items()))})"
+              + (f" — mismatched (found, declared): {wrong}" if wrong else ""))
+        check(sorted(counts) == sorted(EXPECTED_AGENT_FILES),
+              "the install's agent-bearing files are exactly level4..level13 + "
+              "sharedassets18.assets")
 
     print("[5] shim protocol (in-process)")
     counter: dict = {"calls": 0}
@@ -2673,6 +3090,33 @@ def selftest(game_dir: Path | None, live: bool, verbose: bool = True,
             finally:
                 shim3.shutdown(); shim3.server_close()
                 mock3.shutdown(); mock3.server_close()
+
+    print("[8] UI structure, through the withdrawn --gui-check build")
+    display = bool(os.environ.get("DISPLAY")) or IS_WINDOWS or IS_MACOS
+    probe = _st_gui_check({"mode": MODE_OFF, "mode_confirmed": False}, "") if display else None
+    if probe is None:
+        check(True, "skipped — no usable display/tkinter here, so no window was built "
+                    "(the tab map itself is verified in [0i])")
+    else:
+        check(probe[1] == len(TAB_ORDER),
+              f"the GUI builds all {probe[1]} tab frames: {', '.join(TAB_ORDER)}")
+        check(probe[0] == len(_st_visible_tabs(None)),
+              f"with no setup confirmed the notebook holds Home only ({probe[0]} tab)")
+        for mode in MODE_ORDER:
+            want = _st_visible_tabs(mode)
+            got = _st_gui_check({"mode": mode, "mode_confirmed": True}, TAB_OF_MODE[mode])
+            check(got is not None and got[0] == len(want) and got[1] == len(TAB_ORDER),
+                  f"confirming {mode_label(mode)} shows {len(want)} tabs "
+                  f"({', '.join(want)}) — got {got[0] if got else 'no build'}")
+        for tab in ("characters", "backup"):
+            got = _st_gui_check({"mode": MODE_SHIM, "mode_confirmed": True}, tab)
+            check(got is not None and got[0] == 4 and got[1] == len(TAB_ORDER),
+                  f"--tab {tab} keeps Home + the setup tab + Characters + Backup "
+                  f"({got[0] if got else 'no build'} tabs)")
+        got = _st_gui_check({"mode": MODE_OFF, "mode_confirmed": False}, "models")
+        check(got is not None and got[0] == 4,
+              f"a pre-rebuild --tab name still opens its new tab "
+              f"({got[0] if got else 'no build'} tabs)")
 
     passed = sum(1 for ok, _ in results if ok)
     print(f"\n== {passed}/{len(results)} checks passed ==")
@@ -2990,9 +3434,10 @@ class ToolTip:
 
 
 def add_tip(widget, text: str, wraplength: int = 460):
-    """Attach (and keep a reference to) a tooltip; returns the ToolTip or None."""
-    if not text:
-        return None
+    """Attach (and keep a reference to) a tooltip.
+
+    Empty text is fine: the tooltip stays invisible until set_text() fills it,
+    which is how the "in use now" and scope lines get their hover text later."""
     tip = ToolTip(widget, text, wraplength=wraplength)
     try:
         widget._vaudville_tip = tip              # keep it alive
@@ -3008,8 +3453,7 @@ def gui_main(args) -> int:
     class App(tk.Tk):
         def __init__(self):
             super().__init__()
-            self.title(f"{APP_NAME} {APP_VERSION} — Vaudeville LLM / endpoint control"
-                       " - smart settings")
+            self.title(f"{APP_NAME} {APP_VERSION} — how Vaudeville talks to its AI")
             self.geometry(getattr(args, "geometry", None) or "1120x800")
             self.minsize(960, 660)
             self.cfg = load_config()
@@ -4178,7 +4622,7 @@ def gui_main(args) -> int:
                                              "how many character and engine settings this tool "
                                              "can see.") + "\n" + res.summary())
                 for n in res.notes:
-                    self.log("note: " + T(n))
+                    self.log("note: " + n)
                 self.load_values()
                 self.refresh_models()
                 self._update_group_scope()
@@ -4205,7 +4649,7 @@ def gui_main(args) -> int:
                 lines.append(T("No AI settings found in this folder — is it the Vaudeville "
                                "install?"))
             if res.notes:
-                lines.append(T("Worth knowing: ") + "; ".join(T(n) for n in res.notes[:2]))
+                lines.append("Worth knowing: " + "; ".join(res.notes[:2]))
             return "\n".join(lines)
 
         def _initial_scan(self):
@@ -4583,9 +5027,9 @@ def gui_main(args) -> int:
                 box.delete("1.0", "end")
                 box.insert("end", " · ".join(head) + "\n")
                 for n in notes:
-                    box.insert("end", "• " + T(n) + "\n")
+                    box.insert("end", "• " + n + "\n")
                 for w in warnings:
-                    box.insert("end", "⚠ " + T(w) + "\n")
+                    box.insert("end", "⚠ " + w + "\n")
                 box.insert("end", "\n" + T("Changes: ") +
                            friendly_count(len(edits), "value", "values") + "\n")
                 for e in edits:
