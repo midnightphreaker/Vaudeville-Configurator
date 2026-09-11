@@ -11,9 +11,6 @@ on:
         default: retry
         options: [Major, minor, retry]
 
-permissions:
-  contents: write
-
 env:
   REPO_NAME: Vaudville-Configurator
 
@@ -32,23 +29,36 @@ jobs:
           fetch-depth: 0
       - id: calc
         env:
-          EVENT: ${{ github.event_name }}
           CHOICE: ${{ github.event.inputs.version_choice }}
+          TOKEN: ${{ secrets.AUTH_TOKEN || secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
           cur="$(cat VERSION)"
           IFS=. read -r a b c <<< "$cur"
+          # Forgejo delivers some push-like runs with an EMPTY github.event_name
+          # (observed: the run that failed refusing to overwrite v1.3.4), so the
+          # event name cannot decide anything.  A manual run always carries the
+          # version_choice input; a push never does.
           choice="$CHOICE"
-          [ "$EVENT" = "workflow_dispatch" ] || choice=retry
+          if [ -n "$choice" ]; then dispatched=true; else dispatched=false; choice=retry; fi
           case "$choice" in
             Major) new="$a.$((b + 1)).0"; bump=true ;;
             minor) new="$a.$b.$((c + 1))"; bump=true ;;
             retry) new="$cur";          bump=false ;;
             *) echo "unknown version_choice: $choice" >&2; exit 2 ;;
           esac
-          if [ "$EVENT" = "push" ]; then
-            # automatic publication only when the application version changed
-            if git rev-parse -q --verify "refs/tags/v$new" >/dev/null; then publish=false; else publish=true; fi
+          # Tag existence is decided over the network, with the same ls-remote the
+          # "rel" guard uses: the runner checkout is not a trustworthy source of
+          # tags, and if these two disagree a no-bump push fails instead of
+          # skipping.  Automatic publication happens only when the version changed.
+          host="${{ github.server_url }}"; host="${host#https://}"
+          tag_sha="$(git ls-remote \
+              "https://x-access-token:$TOKEN@$host/${{ github.repository }}.git" \
+              "refs/tags/v$new" | cut -f1 || true)"
+          if [ "$dispatched" = true ]; then
+            publish=true
+          elif [ -n "$tag_sha" ]; then
+            publish=false
           else
             publish=true
           fi
@@ -62,7 +72,7 @@ jobs:
             echo "bump=$bump"
             echo "notes=$(printf '%s' "$notes" | base64 -w 0)"
           } >> "$GITHUB_OUTPUT"
-          echo "### version=$new publish=$publish bump=$bump choice=$choice prev=${prev:-none}"
+          echo "### version=$new publish=$publish bump=$bump choice=$choice dispatched=$dispatched tag=${tag_sha:-none} prev=${prev:-none}"
       - id: rel
         if: steps.calc.outputs.publish == 'true'
         env:
