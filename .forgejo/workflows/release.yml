@@ -204,15 +204,17 @@ jobs:
           # Prove the data modules really landed inside the .exe.  A module whose
           # .py is absent from this checkout is skipped: PyInstaller only warns
           # about an unresolvable --hidden-import, and that must not fail a build.
+          # Wine's python ends every line with CR, which silently defeats a
+          # bare "$" anchor, so strip CR before asserting on the listing.
           listing="$(python -m PyInstaller.utils.cliutils.archive_viewer -l -r -b \
-                       dist/VaudvilleConfigurator.exe 2>/dev/null || true)"
+                       dist/VaudvilleConfigurator.exe 2>/dev/null | tr -d '\r' || true)"
           if [ -z "$listing" ]; then
             echo "### WARNING: archive_viewer gave no output under Wine; bundle contents unverified"
           else
             for m in $extra_modules; do
               if [ ! -f "$m.py" ]; then
                 echo "### note: $m.py not in this checkout; skipping its bundle assertion"
-              elif grep -qE "^[[:space:]]*$m\$" <<<"$listing"; then
+              elif grep -qE "^[[:space:]]*$m[[:space:]]*$" <<<"$listing"; then
                 echo "### bundle contains $m"
               else
                 echo "### ERROR: $m is missing from dist/VaudvilleConfigurator.exe" >&2
