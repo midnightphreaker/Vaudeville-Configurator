@@ -41,6 +41,19 @@ The rest of this README follows that order: [getting it](#getting-it),
 [platform notes](#platform-notes), [for the curious](#for-the-curious).
 
 ---
+## What it looks like
+
+The first page, before any setup is chosen - one question, three cards:
+
+![The first page with the three setup cards](docs/screenshots/home-off.png)
+
+The Characters page, tuning one place in town at a time:
+
+![The Characters page with a cast group selected](docs/screenshots/tab-characters.png)
+
+Remote mode, pointed at an OpenAI-compatible service:
+
+![Remote mode with a service address, model name and translator controls](docs/screenshots/tab-remote.png)
 
 ## Getting it
 
