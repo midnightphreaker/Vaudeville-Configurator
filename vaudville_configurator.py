@@ -2506,14 +2506,28 @@ def _st_probe_argv(extra: list) -> list:
 
 def _st_gui_check(config: dict, tab: str = ""):
     """Build the real GUI through the existing withdrawn `--gui-check` path and
-    report (tabs in the notebook, tab frames built).
+    report what the notebook actually holds.
 
     `--gui-check` withdraws the window before it is ever mapped, so nothing
     appears on anybody's desktop, and it skips the game scan.  The child runs in
     a throwaway XDG home, so the caller's own config is neither read nor
-    written.  Returns None when it cannot run here (no display, no tkinter,
-    broken build); the caller then skips the section instead of failing it."""
+    written.
+
+    Returns ``(probe, problem, skip)``:
+
+    * ``probe``   ``(tabs, frames_built, visible_keys)`` when the child printed
+      its banner, else ``None``.  ``visible_keys`` are tab keys in build order,
+      so a caller can assert *which* tabs were revealed, not merely how many.
+    * ``problem`` non-empty when the child ran and misbehaved (crashed, exited
+      non-zero, or reworded its banner).  That is a FAILURE, never a skip.
+    * ``skip``    non-empty only when this environment cannot run a GUI check at
+      all (no tkinter, no child interpreter).  The caller may then skip the
+      section out loud."""
     import tempfile
+    try:
+        import tkinter                                         # noqa: F401
+    except Exception as exc:                                   # noqa: BLE001
+        return None, "", f"tkinter is not importable here ({type(exc).__name__}: {exc})"
     try:
         with tempfile.TemporaryDirectory(prefix="vaudville-selftest-ui-") as td:
             env = dict(os.environ)
@@ -2530,9 +2544,21 @@ def _st_gui_check(config: dict, tab: str = ""):
                                   text=True, timeout=60)
             out = (proc.stdout or "") + "\n" + (proc.stderr or "")
             m = re.search(r"GUI built OK \(withdrawn\); tabs: (\d+) \(built: (\d+)", out)
-            return (int(m.group(1)), int(m.group(2))) if m else None
-    except Exception:                                          # noqa: BLE001
-        return None
+            v = re.search(r"\| visible: ([^)]*)\)", out)
+            if not m or not v:
+                return (None,
+                        f"the child printed no usable banner (exit {proc.returncode}); "
+                        f"last output: {out.strip()[-240:] or '(empty)'}", "")
+            probe = (int(m.group(1)), int(m.group(2)),
+                     [k.strip() for k in v.group(1).split(",") if k.strip()])
+            problem = "" if proc.returncode == 0 else f"the child exited {proc.returncode}"
+            return probe, problem, ""
+    except subprocess.TimeoutExpired:
+        return None, "the --gui-check child timed out after 60s", ""
+    except OSError as exc:
+        return None, "", f"no child interpreter could be started here ({exc})"
+    except Exception as exc:                                   # noqa: BLE001
+        return None, f"the --gui-check child broke: {type(exc).__name__}: {exc}", ""
 
 
 def _st_deck_exemption():
@@ -2548,33 +2574,52 @@ def _st_deck_exemption():
         src = inspect.getsource(gui_main)
     except Exception:                                          # noqa: BLE001
         return None
-    m = re.search(r"if\s+(slot\.name == DECK_MODEL_NAME[\s\S]*?):[ \t]*\n[ \t]*pass", src)
+    # Lift BOTH halves of the shipped rule: the outer "would this panel warn at
+    # all" guard and the inner Steam Deck exemption.  Re-implementing either by
+    # hand here would let the production copy drift unnoticed.
+    m = re.search(r'if\s+(panel\["restrict"\] and [\s\S]*?):[ \t]*\n'
+                  r'[ \t]*if\s+(slot\.name == DECK_MODEL_NAME[\s\S]*?):[ \t]*\n[ \t]*pass',
+                  src)
     if not m:
-        return (False, "no Steam Deck exemption left in gui_main — if refresh_models() was "
-                       "refactored, update _st_deck_exemption() in the self-test")
-    cond = " ".join(re.sub(r"\\\s+", " ", m.group(1)).split())
+        return (False, "no Basic-mode model warning guard left in gui_main — if "
+                       "refresh_models() was refactored, update _st_deck_exemption() "
+                       "in the self-test")
+    outer = " ".join(re.sub(r"\\\s+", " ", m.group(1)).split())
+    exempt_cond = " ".join(re.sub(r"\\\s+", " ", m.group(2)).split())
 
-    def warns(slot_name: str, target: str) -> bool:
-        """True when the restricted (Basic) panel would flag this slot."""
-        if is_llama3_8b_family(Path(target).name):
-            return False                     # in-family, never a warning
+    def warns(slot_name: str, target: str):
+        """(would the restricted Basic panel flag this slot?, evaluation error)."""
         ns = {"slot": SimpleNamespace(name=slot_name), "st": {"target": target},
-              "Path": Path, "DECK_MODEL_NAME": DECK_MODEL_NAME}
+              "panel": {"restrict": True}, "Path": Path,
+              "DECK_MODEL_NAME": DECK_MODEL_NAME,
+              "is_llama3_8b_family": is_llama3_8b_family}
         try:
-            exempt = bool(eval(cond, {"__builtins__": {}}, ns))   # noqa: S307
-        except Exception:                                        # noqa: BLE001
-            return True                      # fail safe: warn
-        return not exempt
+            flagged = bool(eval(outer, {"__builtins__": {}}, ns))       # noqa: S307
+            exempt = (bool(eval(exempt_cond, {"__builtins__": {}}, ns))  # noqa: S307
+                      if flagged else False)
+        except Exception as exc:                                         # noqa: BLE001
+            return True, (f"the lifted condition could not be evaluated here: "
+                          f"{type(exc).__name__}: {exc}")
+        return flagged and not exempt, ""
 
     cases = [(DECK_MODEL_NAME, f"/models/{DECK_MODEL_NAME}", False,
               "the shipped deck file must stay unflagged"),
+             (PRIMARY_MODEL_NAME, f"/models/{PRIMARY_MODEL_NAME}", False,
+              f"an in-family {LLAMA3_8B_FAMILY} file in the main slot must not warn"),
              (DECK_MODEL_NAME, "/models/Mistral-7B-Instruct-v0.3.gguf", True,
               "a different file linked into the deck slot must still warn"),
              (PRIMARY_MODEL_NAME, "/models/Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf", True,
               "Llama-3.1 in the main slot must still warn")]
-    bad = [why for name, tgt, want, why in cases if warns(name, tgt) != want]
-    return (not bad, ("; ".join(bad) if bad
-                      else f"{len(cases)} slot/target cases against `{cond}`"))
+    bad = []
+    for name, tgt, want, why in cases:
+        got, err = warns(name, tgt)
+        if err:
+            bad.append(err)
+        elif got != want:
+            bad.append(why)
+    return (not bad, ("; ".join(dict.fromkeys(bad)) if bad
+                      else f"{len(cases)} slot/target cases against the shipped guard "
+                           f"`{outer}` / `{exempt_cond}`"))
 
 
 def _st_agent_file_counts(res) -> dict:
@@ -2646,25 +2691,43 @@ def selftest(game_dir: Path | None, live: bool, verbose: bool = True,
     check(wk == {} or set(wk) == {"creationflags"}, f"windows detach kwargs: {wk}")
     check(isinstance(wd, list), f"windows steam-dir probe safe off-windows: {wd}")
     vfile = Path(__file__).resolve().parent / "VERSION"
-    if vfile.is_file() and not getattr(sys, "frozen", False):
-        check(vfile.read_text().strip() == APP_VERSION,
-              f"VERSION file ({vfile.read_text().strip()}) matches APP_VERSION ({APP_VERSION})")
+    if getattr(sys, "frozen", False):
+        check(True, "skipped — a frozen single-file build carries no VERSION file beside it")
+    else:
+        onfile = vfile.read_text().strip() if vfile.is_file() else "MISSING"
+        check(vfile.is_file() and onfile == APP_VERSION,
+              f"VERSION file ({onfile}) matches APP_VERSION ({APP_VERSION})")
 
     print("[0c] sibling data modules (vaudville_cast / vaudville_help)")
     frozen = bool(getattr(sys, "frozen", False))
     where = "frozen single-file build" if frozen else "source run"
     check(cast is not None, f"vaudville_cast imported and in use ({where})")
     check(helpmod is not None, f"vaudville_help imported and in use ({where})")
-    import importlib.util
-    specs = {}
-    for name in ("vaudville_cast", "vaudville_help"):
-        try:
-            specs[name] = importlib.util.find_spec(name) is not None
-        except Exception:                                      # noqa: BLE001
-            specs[name] = False
-    check(all(specs.values()),
-          "both modules are findable by the import machinery, so a bundle that "
-          f"dropped them would fail here instead of degrading silently ({specs})")
+    if frozen:
+        import importlib.util
+        specs = {}
+        for name in ("vaudville_cast", "vaudville_help"):
+            try:
+                specs[name] = importlib.util.find_spec(name) is not None
+            except Exception:                                  # noqa: BLE001
+                specs[name] = False
+        check(all(specs.values()),
+              "both modules are findable by the import machinery inside this frozen "
+              "build (a fresh-interpreter import needs a Python a single-file build "
+              f"does not ship) ({specs})")
+    else:
+        imports = {}
+        here = str(Path(__file__).resolve().parent)
+        cenv = dict(os.environ,
+                    PYTHONPATH=here + os.pathsep + os.environ.get("PYTHONPATH", ""))
+        for name in ("vaudville_cast", "vaudville_help"):
+            proc = subprocess.run([sys.executable, "-c", f"import {name}"], env=cenv,
+                                  capture_output=True, text=True, timeout=60)
+            imports[name] = proc.returncode == 0
+        check(all(imports.values()),
+              "both modules really import in a fresh interpreter running this same "
+              "file, so a bundle that dropped or broke them fails here instead of "
+              f"degrading silently ({imports})")
     cast_names = ("ALL_KEY", "ALL_LABEL", "CAST_GROUPS", "GROUP_OF_FILE", "CANONICAL_FILES",
                   "group_of", "LEVELS_ARE_DIFFICULTY", "DIFFICULTY_SCALE",
                   "SYSTEM_PROMPT_EDITABLE", "PERSONA_NOTE", "FRIENDLY_GROUP_INTRO", "EVIDENCE")
@@ -2743,7 +2806,7 @@ def selftest(game_dir: Path | None, live: bool, verbose: bool = True,
 
     print("[0f] cast data and group-scoped patching")
     if cast is None:
-        check(False, "cast checks skipped — vaudville_cast did not import")
+        check(False, "vaudville_cast did not import, so none of the cast checks ran")
     else:
         from types import SimpleNamespace
         groups = cast_groups()
@@ -2840,11 +2903,14 @@ def selftest(game_dir: Path | None, live: bool, verbose: bool = True,
           and is_llama3_8b_family("meta-llama-3-8b-instruct-q5_k_m.gguf"),
           "the family check rejects Llama-3.1/3.2 and is case/punctuation tolerant for 3-8B")
     check([s.name for s in model_slots()] == [PRIMARY_MODEL_NAME, DECK_MODEL_NAME],
-          "the two model slots are the two file names the build hard-codes")
-    exempt = _st_deck_exemption()
+          "the two model slots are PRIMARY then DECK, in that order (anchored to real "
+          "files in [3] when an install is present)")
+    exempt = None if frozen else _st_deck_exemption()
     if exempt is None:
-        check(True, "Basic-mode warning logic not inspectable here (a frozen build ships no "
-                    "source); --gui-check builds that panel instead")
+        check(True, "skipped — " + ("a frozen build ships no source to lift the Basic-mode "
+                                    "warning rule from" if frozen else
+                                    "the Basic-mode warning rule could not be read out of "
+                                    "gui_main") + "; --gui-check builds that panel instead")
     else:
         check(exempt[0], f"the Basic-mode panel leaves the shipped deck file alone — "
                          f"{exempt[1]}")
@@ -2858,6 +2924,11 @@ def selftest(game_dir: Path | None, live: bool, verbose: bool = True,
     check(all(normalize_tab(a) == k for a, k in LEGACY_TAB_NAMES.items())
           and normalize_tab("nope") == "" and normalize_tab(None) == "",
           f"the {len(LEGACY_TAB_NAMES)} pre-rebuild tab names still land on the new tabs")
+    check(len(LEGACY_TAB_NAMES) == 14 and len(GUI_FIELD_GRIDS) == 2
+          and len(MODE_CARD_COPY) == 3 and len(EXPECTED_AGENT_FILES) == 11,
+          "this suite's own fixtures are still full size (14 legacy tab names, 2 field "
+          "grids, 3 mandated cards, 11 character files) — shrinking one would quietly "
+          "shrink what is verified")
     check(TAB_OF_MODE == {MODE_OFF: "basic", MODE_DIRECT: "advanced", MODE_SHIM: "remote"}
           and MODE_OF_TAB == {v: k for k, v in TAB_OF_MODE.items()},
           "each mode owns exactly one tab: "
@@ -2896,14 +2967,11 @@ def selftest(game_dir: Path | None, live: bool, verbose: bool = True,
 
     print("[2] Steam / game detection")
     found = find_game_dirs()
-    for p, src in found:
-        check(True, f"found {p}  ({src})")
-    if not found:
-        if ci:
-            check(True, "no Vaudeville install here — "
-                          "CI mode skips the game-dependent sections")
-        else:
-            check(False, "no Vaudeville install found")
+    check(bool(found) or ci,
+          f"found {friendly_count(len(found), 'Vaudeville install', 'Vaudeville installs')}"
+          + (": " + "; ".join(f"{p}  ({src})" for p, src in found) if found else
+             (" — acceptable on a CI runner, which skips the game-dependent sections"
+              if ci else " — expected a Steam install on this machine")))
     gd = game_dir or (found[0][0] if found else None)
     if gd is None:
         if not ci:
@@ -2937,6 +3005,13 @@ def selftest(game_dir: Path | None, live: bool, verbose: bool = True,
         check(len(res.llm) == 1, f"exactly one LLMUnity.LLM component ({len(res.llm)})")
         check(len(res.agents) > 0, f"{len(res.agents)} LLMUnity.LLMAgent components")
         check(all(b.leftover >= 0 for b in res.blobs), "all blobs decoded without over-read")
+        observed = {Path(st["target"]).name
+                    for st in (slot_status(gd, s) for s in model_slots()) if st["target"]}
+        check(not observed or observed <= {PRIMARY_MODEL_NAME, DECK_MODEL_NAME},
+              "the model files this install really points at are the two names the build "
+              "hard-codes" + (f": {', '.join(sorted(observed))}" if observed else
+                              " (no model file is linked here, so there is nothing to "
+                              "anchor to)"))
         if res.llm:
             m = res.llm[0].values["model"]
             check(m.lower().endswith(".gguf"), f"LLM.model = {m!r}")
@@ -3093,30 +3168,59 @@ def selftest(game_dir: Path | None, live: bool, verbose: bool = True,
 
     print("[8] UI structure, through the withdrawn --gui-check build")
     display = bool(os.environ.get("DISPLAY")) or IS_WINDOWS or IS_MACOS
-    probe = _st_gui_check({"mode": MODE_OFF, "mode_confirmed": False}, "") if display else None
-    if probe is None:
-        check(True, "skipped — no usable display/tkinter here, so no window was built "
+    gui_probed = False
+    if display:
+        probe, problem, skip = _st_gui_check({"mode": MODE_OFF, "mode_confirmed": False}, "")
+    else:
+        probe, problem, skip = None, "", "this process has no display to draw on"
+    if probe is None and skip:
+        check(True, "skipped — " + skip + ", so no window was built "
                     "(the tab map itself is verified in [0i])")
     else:
-        check(probe[1] == len(TAB_ORDER),
-              f"the GUI builds all {probe[1]} tab frames: {', '.join(TAB_ORDER)}")
-        check(probe[0] == len(_st_visible_tabs(None)),
-              f"with no setup confirmed the notebook holds Home only ({probe[0]} tab)")
-        for mode in MODE_ORDER:
-            want = _st_visible_tabs(mode)
-            got = _st_gui_check({"mode": mode, "mode_confirmed": True}, TAB_OF_MODE[mode])
-            check(got is not None and got[0] == len(want) and got[1] == len(TAB_ORDER),
-                  f"confirming {mode_label(mode)} shows {len(want)} tabs "
-                  f"({', '.join(want)}) — got {got[0] if got else 'no build'}")
-        for tab in ("characters", "backup"):
-            got = _st_gui_check({"mode": MODE_SHIM, "mode_confirmed": True}, tab)
-            check(got is not None and got[0] == 4 and got[1] == len(TAB_ORDER),
-                  f"--tab {tab} keeps Home + the setup tab + Characters + Backup "
-                  f"({got[0] if got else 'no build'} tabs)")
-        got = _st_gui_check({"mode": MODE_OFF, "mode_confirmed": False}, "models")
-        check(got is not None and got[0] == 4,
-              f"a pre-rebuild --tab name still opens its new tab "
-              f"({got[0] if got else 'no build'} tabs)")
+        check(probe is not None and not problem,
+              "the --gui-check child built a window and reported its tabs"
+              + (f" — {problem}" if problem else ""))
+        gui_probed = probe is not None
+        if probe is not None:
+            check(probe[1] == len(TAB_ORDER),
+                  f"the GUI builds all {probe[1]} tab frames: {', '.join(TAB_ORDER)}")
+            want = _st_visible_tabs(None)
+            check(probe[0] == len(want) and probe[2] == want,
+                  "with no setup confirmed the notebook holds Home only — showed "
+                  f"({', '.join(probe[2]) or 'nothing'})")
+            for mode in MODE_ORDER:
+                want = _st_visible_tabs(mode)
+                got, prob, _skip = _st_gui_check({"mode": mode, "mode_confirmed": True},
+                                                 TAB_OF_MODE[mode])
+                check(got is not None and got[2] == want and got[1] == len(TAB_ORDER),
+                      f"confirming {mode_label(mode)} reveals exactly ({', '.join(want)})"
+                      f" — got ({', '.join(got[2]) if got else (prob or 'no build')})")
+            for tab in ("characters", "backup"):
+                want = _st_visible_tabs(MODE_SHIM)
+                got, prob, _skip = _st_gui_check({"mode": MODE_SHIM, "mode_confirmed": True},
+                                                 tab)
+                check(got is not None and got[2] == want and got[1] == len(TAB_ORDER),
+                      f"--tab {tab} keeps Home + the setup tab + Characters + Backup"
+                      f" — got ({', '.join(got[2]) if got else (prob or 'no build')})")
+            want = _st_visible_tabs(MODE_OFF)
+            got, prob, _skip = _st_gui_check({"mode": MODE_OFF, "mode_confirmed": False},
+                                             "models")
+            check(got is not None and got[2] == want,
+                  "a pre-rebuild --tab name still opens its new tab"
+                  f" — got ({', '.join(got[2]) if got else (prob or 'no build')})")
+
+    # A section that declines to run must say so out loud.  Every legitimate
+    # decline above emits a message starting with "skipped", and how many there
+    # may be is fully determined by the environment: two in a frozen single-file
+    # build (no VERSION file beside it, no gui_main source to lift) plus one when
+    # no window could be built.  If an edit ever makes checks vanish quietly the
+    # count stops matching and the suite fails instead of reporting a smaller
+    # denominator.
+    skips = [m for _ok, m in results if m.startswith("skipped")]
+    expected_skips = (2 if frozen else 0) + (0 if gui_probed else 1)
+    check(len(skips) == expected_skips,
+          f"{len(skips)} checks declined to run, exactly the {expected_skips} this "
+          f"environment allows" + (f": {'; '.join(s[:70] for s in skips)}" if skips else ""))
 
     passed = sum(1 for ok, _ in results if ok)
     print(f"\n== {passed}/{len(results)} checks passed ==")
@@ -5198,8 +5302,11 @@ def gui_main(args) -> int:
         app.withdraw()
         app.update_idletasks()
         app.update()
+        visible = [k for k in app.tab_frames
+                   if str(app.tab_frames[k]) in set(app.nb.tabs())]
         print("GUI built OK (withdrawn); tabs:", app.nb.index("end"),
-              "(built:", len(app.tab_frames), "|", ", ".join(app.tab_frames), ")")
+              "(built:", len(app.tab_frames), "|", ", ".join(app.tab_frames),
+              "| visible:", ",".join(visible), ")")
         app.destroy()
         return 0
     app.mainloop()
