@@ -59,7 +59,8 @@ Remote mode, pointed at an OpenAI-compatible service:
 
 ### Prebuilt binaries
 
-Each release publishes two archives on the project's Releases page:
+Each release publishes two archives on the project's Releases page
+(<https://git.phrk.org/pub/Vaudville-Configurator/releases>):
 
 ```text
 Vaudville-Configurator.v<version>-linux-amd64.tar.gz     one Linux binary
@@ -400,7 +401,10 @@ that run that shipped copy against a mock backend or a real `llama-server`.
 attaches them to a release whenever the version in `VERSION` changes, or on demand from
 *Actions → release → Run workflow* with a `Major`, `minor` or `retry` choice. The Windows
 `.exe` is cross-built in a Wine container on a Linux runner and smoke-tested there before
-upload.
+upload. A push to `main` that does not change `VERSION` runs the gate and skips publishing
+quietly, so ordinary merges never touch an existing release. Every release starts as a
+draft and is published only after both archives have uploaded and verified, and the version
+tag points at the commit that was actually built.
 
 ---
 
