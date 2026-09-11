@@ -104,7 +104,7 @@ except Exception:                                          # noqa: BLE001
 
 APP_NAME = "Vaudville Configurator"
 APP_SLUG = "vaudville-configurator"
-APP_VERSION = "1.3.4"
+APP_VERSION = "1.4.0"
 STEAM_APPID = "2240920"
 GAME_DIR_NAME = "Vaudeville"
 DATA_DIR = "Vaudeville_Data"
