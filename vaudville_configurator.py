@@ -1218,6 +1218,19 @@ class ScanResult:
         parts = [f"{n}: {c['LLM']} LLM / {c['AGENT']} agents" for n, c in sorted(per_file.items())]
         return "; ".join(parts) or "no LLMUnity components found"
 
+    def friendly_summary(self) -> str:
+        """One plain-English line about what the scan found.
+
+        `summary()` is the per-file component table: right for a log file or
+        `--cli scan`, and exactly the jargon the GUI should not show."""
+        if not self.blobs:
+            return T("no AI settings found in this folder")
+        files = {b.path.name for b in self.blobs}
+        return (T("settings for ") +
+                friendly_count(len(self.agents), "character", "characters") + T(" and ") +
+                friendly_count(len(self.llm), "AI engine block", "AI engine blocks") +
+                T(" in ") + friendly_count(len(files), "game file", "game files"))
+
 
 def scan_game(game_dir: Path, use_profile: bool = True, progress=None) -> ScanResult:
     t0 = time.time()
@@ -2214,7 +2227,9 @@ def build_change_set(cfg: dict, res: ScanResult, overrides: dict | None = None,
         host, port, path, tls = split_endpoint(url, int(cfg.get("direct_port", 0) or 0))
         problems = []
         if not host:
-            problems.append(f"BLOCKED ({MODE_LABELS[MODE_DIRECT]}): no host in the BaseURL")
+            problems.append(f"BLOCKED ({MODE_LABELS[MODE_DIRECT]}): no server address was "
+                            "given — fill in the address on the Remote page first, or choose "
+                            "a different setup")
         if path:
             problems.append(
                 f"BLOCKED ({MODE_LABELS[MODE_DIRECT]}): the game's built-in engine hands the "
@@ -4462,6 +4477,8 @@ def gui_main(args) -> int:
             details = ttk.Frame(c)
             details.pack(fill="x", pady=(2, 0))
             self._expander(details, T("About these groups"), self._groups_detail_text())
+            self._expander(details, T("Technical evidence (research notes)"),
+                           self._groups_evidence_text(), side="left")
             self._expander(details, T("Settings this tool cannot change"),
                            self._locked_detail_text(), side="left")
 
@@ -4498,7 +4515,9 @@ def gui_main(args) -> int:
             self.reset_hint.pack(side="left", padx=10)
             add_tip(self.reset_hint, T("The shipped values are the ones a fresh install has."))
             self._build_apply_row(c, "characters",
-                                  T("Only the characters in the selected group are changed."))
+                                  T("Only the characters in the selected group are changed. "
+                                    "The connection details go to every character, so the "
+                                    "game is never left half-wired."))
             self._update_group_scope()
 
         def _expander(self, parent, label: str, text: str, side: str = "left"):
@@ -4531,14 +4550,16 @@ def gui_main(args) -> int:
             return btn
 
         def _groups_detail_text(self) -> str:
-            bits = []
-            ghelp = help_line(GROUP_HELP, ("about", "groups", "intro"), "")
-            if ghelp:
-                bits.append(ghelp)
+            """Friendly prose about the cast groups — no engine internals."""
+            return help_line(GROUP_HELP, ("about", "groups", "intro"), "")
+
+        def _groups_evidence_text(self) -> str:
+            """The research trail behind the group list, for the curious.
+
+            Kept behind its own clearly-technical toggle: it names Unity and
+            IL2CPP internals, which is good evidence and poor onboarding."""
             ev = evidence_text()
-            if ev:
-                bits.append(T("Where this list comes from:") + "\n" + ev)
-            return "\n\n".join(bits)
+            return (T("Where this list comes from:") + "\n" + ev) if ev else ""
 
         def _locked_detail_text(self) -> str:
             lines = [T("These look editable in other tools, but changing them here would do "
@@ -4724,7 +4745,7 @@ def gui_main(args) -> int:
                 if self.info_tip:
                     self.info_tip.set_text(T("Where the game was found, which build it is, and "
                                              "how many character and engine settings this tool "
-                                             "can see.") + "\n" + res.summary())
+                                             "can see.") + "\n" + res.friendly_summary())
                 for n in res.notes:
                     self.log("note: " + n)
                 self.load_values()
@@ -4737,7 +4758,8 @@ def gui_main(args) -> int:
                             T(" and ") +
                             friendly_count(len(res.llm), "engine setting block",
                                            "engine setting blocks"))
-                self.log(T("Scan complete: ") + res.summary())
+                self.log(T("Scan complete: ") + res.friendly_summary())
+                log("scan detail: " + res.summary())
             self.run(work, done, T("reading the game files…"))
 
         def _scan_text(self, gd: Path, res: ScanResult) -> str:
@@ -5184,7 +5206,8 @@ def gui_main(args) -> int:
                     self.scan = res2
                     self.info_var.set(self._scan_text(gd, res2))
                     self.log(T("Wrote %s; backup at %s") % (len(edits), rec.dir))
-                    self.log(T("Checked afterwards: ") + res2.summary())
+                    self.log(T("Checked afterwards: ") + res2.friendly_summary())
+                    log("post-write detail: " + res2.summary())
                     self.extra_overrides = {}
                     self.load_values()
                     self._update_group_scope()

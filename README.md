@@ -200,7 +200,7 @@ Story Editor roles*, which covers the same thirteen roles reused when you write 
 your own custom mysteries. That is eleven groups and twenty-six characters in total.
 
 The **Which characters?** dropdown chooses who your changes apply to. Pick a place to
-change just the people you meet there, or pick *All characters (26)* to change everybody
+change just the people you meet there, or pick *All characters* to change everybody
 at once. Groups you leave alone keep exactly the settings they have now, so you can give
 the shopkeeper a calmer style while everybody else carries on improvising.
 
@@ -392,8 +392,9 @@ blocks even when a tag is split across two chunks, so reasoning text never reach
 speech synthesiser. The API key goes to the translator through the environment, never
 through a command line.
 
-The same translator code lives standalone in `tools/llamalib_shim.py`, and `tests/` has
-end-to-end scripts that run it against a mock backend or a real `llama-server`.
+The same translator code ships inside the app, and `tests/` has end-to-end scripts
+that run that shipped copy against a mock backend or a real `llama-server`.
+`tools/llamalib_shim.py` is the readable reference copy of that code.
 
 **Releases.** `.forgejo/workflows/release.yml` builds both single-file binaries and
 attaches them to a release whenever the version in `VERSION` changes, or on demand from
