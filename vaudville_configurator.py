@@ -5267,7 +5267,21 @@ def build_parser() -> argparse.ArgumentParser:
     return p
 
 
+def _harden_stdio() -> None:
+    """Never let a legacy console codepage crash a print.
+
+    OEM boxes (cp437/cp850) and redirected pipes on old Windows setups cannot
+    encode an em dash or a warning sign; replacing the unencodable character is
+    always better than dying mid-selftest."""
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(errors="replace")
+        except Exception:                        # noqa: BLE001 - best effort only
+            pass
+
+
 def main(argv=None) -> int:
+    _harden_stdio()
     args = build_parser().parse_args(argv)
     if args.version:
         tag = " (single-file build)" if getattr(sys, "frozen", False) else ""
