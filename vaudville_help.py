@@ -132,6 +132,7 @@ SETTING_HELP: dict[str, dict] = {
 
     # ---- shared by the character agents and the local engine ------------- #
     "advancedOptions": {
+        "label": "Inspector switch (no effect)",
         "what": "A leftover switch from the game's editor that only ever showed or hid the advanced settings below it.",
         "does": "Nothing you can see or feel while playing. The values underneath are used either way.",
         "why_change": "You do not need to. It is scenery, not a control.",
@@ -144,6 +145,7 @@ SETTING_HELP: dict[str, dict] = {
         ],
     },
     "remote": {
+        "label": "Talk to a server",
         "what": "Two switches sharing one name: on a character it means 'phone a server for my lines'; on the engine it means 'let other programs use my model'.",
         "does": "Character side: dialogue comes over the network instead of from the built-in engine. Engine side: the game opens a small AI server of its own.",
         "why_change": "Only through the mode cards (character side) or the 'expose game as server' tick (engine side), so address and door number stay consistent.",
@@ -156,6 +158,7 @@ SETTING_HELP: dict[str, dict] = {
         ],
     },
     "port": {
+        "label": "Door number (port)",
         "what": "A door number: which door the characters knock on for their lines, or (engine side) which door the game opens for other programs.",
         "does": "Numbers patch freely, but the matching host name is stuck at 9-12 characters in the game file - which is why the translator keeps the real address and key for you.",
         "why_change": "Your server is not on the usual 13333, or that door is already taken by something else.",
@@ -168,6 +171,7 @@ SETTING_HELP: dict[str, dict] = {
         ],
     },
     "APIKey": {
+        "label": "Server password",
         "what": "A password the game could hand to a server to prove it is allowed in.",
         "does": "Sent with each request to prove the game is allowed in. Both sides ship empty, and an empty slot cannot be made longer, so the real key lives in the translator instead.",
         "why_change": "You do not, in practice: this box has room for zero characters.",
@@ -182,6 +186,7 @@ SETTING_HELP: dict[str, dict] = {
 
     # ---- character agents only ------------------------------------------- #
     "llm": {
+        "label": "Engine link",
         "what": "The wiring from a character to the engine - which backstage brain this performer talks to.",
         "does": "It is a link, not a value. Vaudeville ships it empty (0, 0): the cast reaches the engine through LlamaLib's own plumbing, not through this reference.",
         "why_change": "Never. There is no safe way to repoint a link by patching bytes, and the game already works with it empty.",
@@ -194,6 +199,7 @@ SETTING_HELP: dict[str, dict] = {
         ],
     },
     "host": {
+        "label": "Server address",
         "what": "The name of the computer the characters phone for their lines - 'localhost' means this one.",
         "does": "Decides where dialogue requests go. The file only has room for a word the same padded size as the shipped one, so your replacement must be 9-12 characters.",
         "why_change": "Advanced mode, with a server on your network whose short name fits (an 11-character address such as 192.168.1.5 does).",
@@ -207,6 +213,7 @@ SETTING_HELP: dict[str, dict] = {
         ],
     },
     "numRetries": {
+        "label": "Retries",
         "what": "How many times a character tries again when the AI server does not answer.",
         "does": "Each attempt waits a little longer than the last (1, 2, 4, 8, 16, then 30 seconds), so a high number means patient but slow failure.",
         "why_change": "Your server is on flaky Wi-Fi, or takes a while to wake up.",
@@ -220,6 +227,7 @@ SETTING_HELP: dict[str, dict] = {
         ],
     },
     "grammar": {
+        "label": "Reply format rule",
         "what": "A rulebook every reply must obey, such as 'answer only in this exact JSON shape'.",
         "does": "Turns free speech into strict form-filling. Characters following a grammar stop sounding like people.",
         "why_change": "You are experimenting with structured output rather than playing.",
@@ -232,6 +240,7 @@ SETTING_HELP: dict[str, dict] = {
         ],
     },
     "numPredict": {
+        "label": "Longest reply",
         "what": "The longest a single line of dialogue may be, counted in word-fragments.",
         "does": "Cuts the character off when the limit is reached. -1 means no limit: finish your sentence.",
         "why_change": "You want shorter, snappier lines, or you pay per word on a hosted service.",
@@ -245,6 +254,7 @@ SETTING_HELP: dict[str, dict] = {
         ],
     },
     "cachePrompt": {
+        "label": "Warm memory",
         "what": "Lets the AI keep the setup it has already read, instead of re-reading it before every line.",
         "does": "Keeps a warm copy of the scene in memory so the next reply starts much faster. Off means a cold read every single time.",
         "why_change": "Almost never. There is no upside, only a longer pause before each line.",
@@ -257,6 +267,7 @@ SETTING_HELP: dict[str, dict] = {
         ],
     },
     "seed": {
+        "label": "Dice seed",
         "what": "The starting number for the AI's dice. Same dice, same performance.",
         "does": "0 means roll fresh dice every time. Any other number freezes the luck, so the same conversation gives the same lines.",
         "why_change": "You are testing, or trying to reproduce one brilliant exchange word for word.",
@@ -270,6 +281,7 @@ SETTING_HELP: dict[str, dict] = {
         ],
     },
     "temperature": {
+        "label": "Wildness",
         "what": "How wild the AI is allowed to be when it chooses its next word.",
         "does": "Low values give safe, predictable lines; high values make characters surprising, poetic, or outright nonsense.",
         "why_change": "Dialogue feels canned (raise it) or characters are talking gibberish (lower it).",
@@ -283,6 +295,7 @@ SETTING_HELP: dict[str, dict] = {
         ],
     },
     "topK": {
+        "label": "Word list size",
         "what": "How many candidate words stay on the shortlist before the AI picks one.",
         "does": "A short shortlist means safer, duller lines; a long one lets odd words in. 0 or -1 means no shortlist at all.",
         "why_change": "You want tighter or looser vocabulary alongside temperature.",
@@ -296,6 +309,7 @@ SETTING_HELP: dict[str, dict] = {
         ],
     },
     "topP": {
+        "label": "Nucleus cut-off",
         "what": "Keeps only the words that together cover a given share of the likely choices.",
         "does": "0.9 means 'consider words until you have covered 90 percent of the likelihood and ignore the rest'. Lower is tamer, higher is looser.",
         "why_change": "You want variety without the chaos of a big temperature.",
@@ -309,6 +323,7 @@ SETTING_HELP: dict[str, dict] = {
         ],
     },
     "minP": {
+        "label": "Minimum chance",
         "what": "A floor: ignore any word that is far less likely than the current favourite.",
         "does": "Trims the silly long tail without tightening the top of the list. 0 switches the floor off.",
         "why_change": "You are seeing odd word choices and want them filtered the modern, gentle way.",
@@ -322,6 +337,7 @@ SETTING_HELP: dict[str, dict] = {
         ],
     },
     "repeatPenalty": {
+        "label": "Repeat brake",
         "what": "How hard the AI is discouraged from reusing words it has just said.",
         "does": "Above 1.0 repeats become less likely each time. 1.0 means no discouragement at all.",
         "why_change": "Characters loop the same phrase like a stuck record.",
@@ -335,6 +351,7 @@ SETTING_HELP: dict[str, dict] = {
         ],
     },
     "presencePenalty": {
+        "label": "New-topic nudge",
         "what": "A nudge towards new topics instead of ones already mentioned.",
         "does": "Penalises any word that has appeared at all, however long ago, so conversation drifts to fresh ground. 0 is off.",
         "why_change": "Your server honours it and the cast keeps circling the same subject.",
@@ -348,6 +365,7 @@ SETTING_HELP: dict[str, dict] = {
         ],
     },
     "frequencyPenalty": {
+        "label": "Overuse brake",
         "what": "A nudge based on how often a word has already been used.",
         "does": "The more a word appears the less likely it becomes - a running tally against repetition. 0 is off.",
         "why_change": "Your server honours it and one word keeps turning up in every line.",
@@ -361,6 +379,7 @@ SETTING_HELP: dict[str, dict] = {
         ],
     },
     "typicalP": {
+        "label": "Typicality",
         "what": "Keeps only words that are about as surprising as you would expect - neither too obvious nor too bizarre.",
         "does": "Filters the shortlist by interestingness. 1.0 turns the filter off.",
         "why_change": "You are experimenting with word-choice settings; this one is pure taste.",
@@ -374,6 +393,7 @@ SETTING_HELP: dict[str, dict] = {
         ],
     },
     "repeatLastN": {
+        "label": "Repeat window",
         "what": "How far back the anti-repetition rule looks.",
         "does": "It is the window repeatPenalty works in: only words inside the last N are discouraged. -1 means the whole memory, 0 switches the penalty off.",
         "why_change": "Loops persist even with a penalty, so the window may be too short.",
@@ -387,6 +407,7 @@ SETTING_HELP: dict[str, dict] = {
         ],
     },
     "mirostat": {
+        "label": "Auto-randomness",
         "what": "An optional autopilot that keeps the surprise level of each line steady.",
         "does": "Instead of you tuning randomness, the AI adjusts itself as it writes. 0 = off, 1 = the original, 2 = Mirostat 2 (the good one).",
         "why_change": "You specifically want the AI to self-tune its own randomness.",
@@ -400,6 +421,7 @@ SETTING_HELP: dict[str, dict] = {
         ],
     },
     "mirostatTau": {
+        "label": "Mirostat target",
         "what": "The surprise level the Mirostat autopilot aims for.",
         "does": "Higher keeps lines more varied, lower keeps them predictable. It only does anything while mirostat is 1 or 2.",
         "why_change": "You turned Mirostat on and want to steer how adventurous it is.",
@@ -413,6 +435,7 @@ SETTING_HELP: dict[str, dict] = {
         ],
     },
     "mirostatEta": {
+        "label": "Mirostat speed",
         "what": "How quickly the Mirostat autopilot corrects itself while writing.",
         "does": "A bigger step adapts fast but can wobble; a smaller step is smooth and slow. Only matters while mirostat is on.",
         "why_change": "You are already using Mirostat and want finer control of its reactions.",
@@ -426,6 +449,7 @@ SETTING_HELP: dict[str, dict] = {
         ],
     },
     "nProbs": {
+        "label": "Word odds detail",
         "what": "Asks the AI to also report the runner-up words it considered.",
         "does": "Purely diagnostic: you get a list of alternatives with each reply. It never changes what a character actually says.",
         "why_change": "You are debugging, or studying how the model makes up its mind.",
@@ -439,6 +463,7 @@ SETTING_HELP: dict[str, dict] = {
         ],
     },
     "ignoreEos": {
+        "label": "Ignore the stop sign",
         "what": "Tells the AI to keep talking after it has signalled 'end of message'.",
         "does": "Replies run on past their natural ending until something else (numPredict) stops them.",
         "why_change": "Debugging a model that ends its sentences too early.",
@@ -452,6 +477,7 @@ SETTING_HELP: dict[str, dict] = {
         ],
     },
     "save": {
+        "label": "Chat history file",
         "what": "A filename the game would use to keep this character's conversation history on disk.",
         "does": "Non-empty means the chat is written to (and reloaded from) a file in the game's save folder. Empty, as shipped, means nothing is written.",
         "why_change": "You do not, from here: the slot ships empty and cannot grow, so no filename fits.",
@@ -464,6 +490,7 @@ SETTING_HELP: dict[str, dict] = {
         ],
     },
     "debugPrompt": {
+        "label": "Prompt debug log",
         "what": "Asks the game to show the exact backstage instructions it sent to the AI.",
         "does": "Writes each full prompt - character notes plus your line - to the game's log instead of keeping it secret.",
         "why_change": "You are working out why a character said something bizarre.",
@@ -477,6 +504,7 @@ SETTING_HELP: dict[str, dict] = {
         ],
     },
     "slot": {
+        "label": "Seat at the server",
         "what": "Which seat at the server's table this character uses.",
         "does": "A server can hold several conversations at once, one per seat, and the seat decides what gets cached. -1 means 'pick a free seat for me'.",
         "why_change": "Never, really - automatic is right for the game, and remote characters get a seat assigned for them anyway.",
@@ -490,6 +518,7 @@ SETTING_HELP: dict[str, dict] = {
         ],
     },
     "systemPrompt": {
+        "label": "Backstage note",
         "what": "The character's backstage note: who they are and how they should behave.",
         "does": "Sent ahead of every line, so it shapes the whole performance. The game overwrites it at load time from its own character text files or from a Workshop story.",
         "why_change": "You do not, from here - your text is replaced on the next load, and it must be 153-156 characters to fit the slot.",
@@ -505,6 +534,7 @@ SETTING_HELP: dict[str, dict] = {
 
     # ---- local engine only ----------------------------------------------- #
     "SSLCert": {
+        "label": "Padlock certificate",
         "what": "The file path of the identity card (certificate) for the game's own AI server.",
         "does": "Used only when the engine's server is switched on and you want it to speak encrypted https. It ships empty, so nothing is encrypted.",
         "why_change": "You are serving the game's model over https to other machines with a certificate of your own.",
@@ -517,6 +547,7 @@ SETTING_HELP: dict[str, dict] = {
         ],
     },
     "SSLKey": {
+        "label": "Padlock key",
         "what": "The file path of the private key that matches the server's identity card.",
         "does": "The other half of https for the game's own server. Also empty as shipped, and a secret you would not want inside a game file anyway.",
         "why_change": "Only together with SSLCert, on a server you are deliberately exposing over https.",
@@ -529,6 +560,7 @@ SETTING_HELP: dict[str, dict] = {
         ],
     },
     "numThreads": {
+        "label": "Processor threads",
         "what": "How many of your processor's workers the AI may use.",
         "does": "More workers means faster thinking on the processor, but fewer are left for the game itself - physics, animation, sound.",
         "why_change": "You want to leave processor power for the game, or a background app is starving it.",
@@ -542,6 +574,7 @@ SETTING_HELP: dict[str, dict] = {
         ],
     },
     "numGPULayers": {
+        "label": "Graphics-card boost",
         "what": "How much of the model is handed to your graphics card to run.",
         "does": "More layers on the card means much faster replies - if the card has room. Too many and you run out of video memory and the game stutters or falls over.",
         "why_change": "You have a graphics card with spare memory and want snappier dialogue.",
@@ -555,6 +588,7 @@ SETTING_HELP: dict[str, dict] = {
         ],
     },
     "parallelPrompts": {
+        "label": "Parallel conversations",
         "what": "How many conversations the engine may work on at the same time.",
         "does": "Each simultaneous conversation needs its own slice of memory. -1 lets the engine decide from how many characters are talking.",
         "why_change": "A crowded scene where several characters speak at once and one is left waiting.",
@@ -568,6 +602,7 @@ SETTING_HELP: dict[str, dict] = {
         ],
     },
     "contextSize": {
+        "label": "Conversation memory",
         "what": "How much of the conversation the AI can hold in mind at once - its short-term memory.",
         "does": "Bigger means characters remember more of the scene, but the first reply is slower and more memory is used. 0 means 'use whatever the model prefers'.",
         "why_change": "Long scenes where characters forget what was just said, and you have memory to spare.",
@@ -581,6 +616,7 @@ SETTING_HELP: dict[str, dict] = {
         ],
     },
     "batchSize": {
+        "label": "Reading chunk size",
         "what": "How much of the setup text the engine swallows in one gulp while it reads the scene in.",
         "does": "A bigger gulp reads long setups faster but asks for more memory. It affects reading in, not the reply itself.",
         "why_change": "Very long character notes or story setups feel slow to start.",
@@ -594,6 +630,7 @@ SETTING_HELP: dict[str, dict] = {
         ],
     },
     "model": {
+        "label": "Model file",
         "what": "The filename of the model file (GGUF) the engine loads - the AI's brain, in one download.",
         "does": "Decides which brain runs the dialogue. The game looks for two fixed filenames, so this tool links your chosen file to one of those names and keeps the original safe.",
         "why_change": "Use the Models tab, never this field: the filename box only fits 33-36 characters.",
@@ -607,6 +644,7 @@ SETTING_HELP: dict[str, dict] = {
         ],
     },
     "flashAttention": {
+        "label": "Fast attention",
         "what": "A faster, leaner way of doing the attention maths inside the engine.",
         "does": "Same dialogue, often more speed and less memory - when the engine build and the model file both support it.",
         "why_change": "You want a big conversation memory on modest hardware and your build supports it.",
@@ -620,6 +658,7 @@ SETTING_HELP: dict[str, dict] = {
         ],
     },
     "reasoning": {
+        "label": "Thinking mode",
         "what": "Lets a 'thinking' model mutter its working-out before it answers.",
         "does": "On = the model thinks out loud before answering; Off = it just answers. This is the game's own engine switch, so it belongs to the local modes - in Remote mode the translator's 'strip think' does the hiding.",
         "why_change": "Your model file is a reasoning model (Qwen3, DeepSeek-R1 style) and you want the better answers it gives.",
@@ -633,6 +672,7 @@ SETTING_HELP: dict[str, dict] = {
         ],
     },
     "lora": {
+        "label": "Add-on weights file",
         "what": "Optional add-on files that fine-tune a model - a small patch laid over the big brain.",
         "does": "If set, the engine loads those patches (comma-separated) with the model. It ships empty, and an empty slot cannot grow.",
         "why_change": "You do not, from here: there is no room for a filename.",
@@ -645,6 +685,7 @@ SETTING_HELP: dict[str, dict] = {
         ],
     },
     "loraWeights": {
+        "label": "Add-on strength",
         "what": "How strongly each of those fine-tune patches should be applied.",
         "does": "A comma-separated list of numbers, one per patch, defaulting to 1.0 each. Meaningless while lora is empty, which it is.",
         "why_change": "Never from here - it only matters once patches actually load, and they cannot.",
@@ -657,6 +698,7 @@ SETTING_HELP: dict[str, dict] = {
         ],
     },
     "dontDestroyOnLoad": {
+        "label": "Keep engine between scenes",
         "what": "Whether the engine stays alive when the game moves between scenes.",
         "does": "On, the AI survives scene changes and keeps its warm memory; off, the game tears it down and rebuilds it. Vaudeville ships it off and manages its own lifetime.",
         "why_change": "Only if you are experimenting with scene changes and slow re-loads - not for normal play.",
@@ -669,6 +711,7 @@ SETTING_HELP: dict[str, dict] = {
         ],
     },
     "embeddingsOnly": {
+        "label": "Number-crunching model",
         "what": "A note about the model file: 'this one only turns text into numbers, it cannot talk'.",
         "does": "It describes the model rather than changing it. Vaudeville's models talk, so it stays off.",
         "why_change": "Never - unless you deliberately load a number-crunching model, in which case the cast has nothing to say anyway.",
@@ -681,6 +724,7 @@ SETTING_HELP: dict[str, dict] = {
         ],
     },
     "embeddingLength": {
+        "label": "Summary size",
         "what": "How many numbers are in each of those numeric summaries, for a model that makes them.",
         "does": "Nothing for Vaudeville: it stays 0 because the model is a talker, not a number-cruncher.",
         "why_change": "Never.",
@@ -693,6 +737,7 @@ SETTING_HELP: dict[str, dict] = {
         ],
     },
     "minContextLength": {
+        "label": "Smallest memory (read-out)",
         "what": "A read-out: the smallest conversation memory the loaded model supports.",
         "does": "Nothing - it is the floor the engine reports for the loaded model, not a control.",
         "why_change": "Never; it is informational, and the engine does not even write it back here.",
@@ -705,6 +750,7 @@ SETTING_HELP: dict[str, dict] = {
         ],
     },
     "maxContextLength": {
+        "label": "Largest memory (read-out)",
         "what": "A read-out: the largest conversation memory the loaded model supports.",
         "does": "Nothing - the engine fills it in from the model file at load time. It is the ceiling your contextSize lives under.",
         "why_change": "Never; it is informational and gets refreshed when a model loads.",
