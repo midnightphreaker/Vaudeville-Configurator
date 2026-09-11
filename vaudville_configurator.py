@@ -85,8 +85,22 @@ import threading
 import time
 import urllib.error
 import urllib.request
+import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+
+# Optional sibling modules (written alongside this file).  Both are imported
+# guarded so the configurator still works — with the fallbacks defined further
+# down — when they are missing, e.g. in a frozen single-file build that did not
+# bundle them.
+try:
+    import vaudville_cast as cast
+except Exception:                                          # noqa: BLE001
+    cast = None
+try:
+    import vaudville_help as helpmod
+except Exception:                                          # noqa: BLE001
+    helpmod = None
 
 APP_NAME = "Vaudville Configurator"
 APP_SLUG = "vaudville-configurator"
@@ -144,6 +158,423 @@ def mode_label(value) -> str:
 
 IS_WINDOWS = os.name == "nt"
 IS_MACOS = sys.platform == "darwin"
+
+
+# --------------------------------------------------------------------------- #
+# friendly metadata: field tables, the two optional sibling modules, and the
+# character groups they describe.
+#
+# vaudville_cast.py  -> which characters live in which Unity asset file
+# vaudville_help.py  -> plain-English wording, mode cards, terminology map
+#
+# Both are imported guarded, so this file keeps working (with the built-in
+# fallbacks below) when they are absent, e.g. in a single-file frozen build
+# that did not bundle them.  Copy that comes from vaudville_help is rendered
+# byte-verbatim; TERMS is applied only to strings this file writes itself.
+# --------------------------------------------------------------------------- #
+AGENT_FIELDS_GUI = [
+    ("remote", "bool", "connect to a remote server instead of the local llama.cpp"),
+    ("host", "str", "remote host (in-place patch: length must stay in the same ceil4 bucket)"),
+    ("port", "int", "remote port"),
+    ("APIKey", "str", "sent as 'Authorization: Bearer …' (empty ⇒ keep the key in the shim)"),
+    ("numRetries", "int", "connection retries with 1/2/4/8/16/30 s backoff"),
+    ("numPredict", "int", "max tokens to generate, -1 = unlimited  [sent to remote]"),
+    ("temperature", "float", "0 = deterministic  [sent to remote]"),
+    ("topK", "int", "[sent to remote]"),
+    ("topP", "float", "nucleus sampling  [sent to remote]"),
+    ("minP", "float", "[sent to remote]"),
+    ("repeatPenalty", "float", "1.0 = off  [sent to remote]"),
+    ("repeatLastN", "int", "window for the repeat penalty  [sent to remote]"),
+    ("presencePenalty", "float", "[sent to remote]"),
+    ("frequencyPenalty", "float", "[sent to remote]"),
+    ("typicalP", "float", "1.0 = off  [sent to remote]"),
+    ("mirostat", "int", "0 off / 1 mirostat / 2 mirostat-2  [sent to remote]"),
+    ("mirostatTau", "float", "[sent to remote]"),
+    ("mirostatEta", "float", "[sent to remote]"),
+    ("seed", "int", "0 = random  [sent to remote]"),
+    ("cachePrompt", "bool", "[sent to remote]"),
+    ("ignoreEos", "bool", "[sent to remote]"),
+    ("nProbs", "int", "return top-N probabilities  [sent to remote]"),
+    ("slot", "int", "-1 = auto (remote clients are always forced to -1)"),
+    ("grammar", "str", "GBNF/JSON schema (length-constrained in place)"),
+]
+LLM_FIELDS_GUI = [
+    ("model", "str", "GGUF filename inside StreamingAssets (length-constrained in place)"),
+    ("contextSize", "int", "prompt context in tokens actually used by llama.cpp"),
+    ("maxContextLength", "int", "informational: read back from the model at runtime"),
+    ("minContextLength", "int", "informational"),
+    ("numThreads", "int", "-1 = all cores"),
+    ("numGPULayers", "int", "overridden at boot by the GpuLoad preference / Options slider"),
+    ("batchSize", "int", "prompt processing batch"),
+    ("parallelPrompts", "int", "-1 = auto from the number of clients"),
+    ("flashAttention", "bool", ""),
+    ("reasoning", "bool", "enable the model's 'thinking' mode"),
+    ("remote", "bool", "TRUE ⇒ the game exposes its model as an HTTP server"),
+    ("port", "int", "server port when remote is on"),
+    ("APIKey", "str", "server API key (length-constrained in place)"),
+    ("dontDestroyOnLoad", "bool", ""),
+    ("embeddingsOnly", "bool", ""),
+    ("embeddingLength", "int", ""),
+]
+# character sampling fields, in display order (the Characters tab)
+CHARACTER_FIELDS = [
+    "temperature", "topK", "topP", "minP", "repeatPenalty", "repeatLastN",
+    "presencePenalty", "frequencyPenalty", "typicalP", "mirostat", "mirostatTau",
+    "mirostatEta", "seed", "numPredict", "cachePrompt",
+]
+# llama.cpp engine fields (the Local Mode - Advanced tab)
+ENGINE_FIELDS = ["contextSize", "batchSize", "numThreads", "numGPULayers",
+                 "flashAttention", "reasoning", "parallelPrompts"]
+# the values an unmodified install ships with
+STOCK_CHARACTER_VALUES = {
+    "temperature": "0.2", "topK": "40", "topP": "0.9", "minP": "0.05",
+    "repeatPenalty": "1.1", "repeatLastN": "64", "presencePenalty": "0",
+    "frequencyPenalty": "0", "typicalP": "1.0", "mirostat": "0",
+    "mirostatTau": "5.0", "mirostatEta": "0.1", "seed": "0",
+    "numPredict": "-1", "cachePrompt": "true",
+}
+# connection wiring: always written for every character, never group-scoped
+ENDPOINT_FIELDS = ("remote", "host", "port", "APIKey", "numRetries")
+# shipped values of the fixed fields the Characters grid does not expose
+STOCK_EXTRA_VALUES = {"nProbs": 0, "ignoreEos": False, "slot": -1}
+# the only model family Local Mode - Basic may use
+LLAMA3_8B_FAMILY = "Meta-Llama-3-8B-Instruct"
+# fields this tool deliberately does NOT offer as editable, and why
+INERT_FIELDS = {
+    "advancedOptions": "an editor show/hide flag; it does nothing when the game runs",
+    "systemPrompt": "the game overwrites it every time a character loads, from its own "
+                    "script data, so editing it changes nothing",
+}
+EMPTY_TEXT_FIELDS = ("APIKey", "grammar", "save", "SSLCert", "SSLKey", "lora", "loraWeights")
+
+GITHUB_URL_FALLBACK = "https://git.phrk.org/pub/Vaudville-Configurator"
+CREDIT_FALLBACK = ("Vaudville Configurator — a community tool for Bumblebee Studios' "
+                   "Vaudeville. Not affiliated with or endorsed by Bumblebee Studios.")
+FRIENDLY_GROUP_INTRO_FALLBACK = (
+    "Every speaking character in Vaudeville has its own copy of the AI settings below. "
+    "Pick a group to change just those characters, or keep “All characters” to change "
+    "everyone at once. Empty boxes are left exactly as they are.")
+MODE_CARDS_FALLBACK = {
+    MODE_OFF: {
+        "title": MODE_LABELS[MODE_OFF],
+        "blurb": ("The game runs exactly as shipped: your own model file is loaded inside the "
+                  "game process and nothing leaves your computer. No server to start, no "
+                  "network, no extra steps — pick a model and play."),
+        "difficulty": "Easiest — choose a model and press Apply.",
+        "restrictions": (f"only models from the {LLAMA3_8B_FAMILY} family, because that is what "
+                         "the shipped game data expects; no custom servers, no API keys, "
+                         "no web endpoints."),
+    },
+    MODE_DIRECT: {
+        "title": MODE_LABELS[MODE_DIRECT],
+        "blurb": ("The game connects straight to an AI server you run yourself (for example "
+                  "llama-server). Faster and more controllable than the in-game loader, and "
+                  "any model that server can load is fair game — but you have to start and "
+                  "keep that server running yourself."),
+        "difficulty": "For tinkerers — you run and maintain your own server.",
+        "restrictions": ("the server must speak the llama.cpp protocol (/health, "
+                         "/apply-template, /completion, /tokenize); the address has to fit the "
+                         "9–12 character space the game reserves, with no https:// and no web "
+                         "path such as /v1."),
+    },
+    MODE_SHIM: {
+        "title": MODE_LABELS[MODE_SHIM],
+        "blurb": ("The game talks to a small translator that this tool starts on your own "
+                  "computer, and the translator talks to any modern AI service you like — a "
+                  "local server or a hosted one. Any address, any model name, API keys and "
+                  "https:// all work, because the translator holds them, not the game."),
+        "difficulty": "Most flexible — a few more fields, and the translator must be running "
+                      "while you play.",
+        "restrictions": ("the translator has to be started before you play (Start button here, "
+                         "or it is restarted for you); it listens on your machine only."),
+    },
+}
+
+TERMS = [tuple(t) for t in (getattr(helpmod, "TERMS", None) or [])
+         if isinstance(t, (list, tuple)) and len(tuple(t)) == 2 and str(t[0]).strip()]
+
+
+def _compile_terms(terms):
+    out = []
+    for old, new in sorted(terms, key=lambda t: len(str(t[0])), reverse=True):
+        try:
+            out.append((re.compile(r"(?<![0-9A-Za-z_])" + re.escape(str(old)) +
+                        r"(?![0-9A-Za-z_])"), str(new)))
+        except re.error:                                     # pragma: no cover
+            continue
+    return out
+
+
+_TERM_RES = _compile_terms(TERMS)
+GITHUB_URL = str(getattr(helpmod, "GITHUB_URL", None) or GITHUB_URL_FALLBACK)
+CREDIT = str(getattr(helpmod, "CREDIT", None) or CREDIT_FALLBACK)
+
+
+def T(text) -> str:
+    """Run a string *this file* writes through the shared terminology map.
+
+    Whole words only, longest phrase first, so "LLMAgent" cannot be half-replaced
+    by an "LLM" rule.  Copy that comes from vaudville_help / vaudville_cast is
+    already in the right words and is rendered verbatim — never pass it through
+    here, and never pass identifiers, file names or mode labels through here."""
+    out = "" if text is None else str(text)
+    for pattern, replacement in _TERM_RES:
+        out = pattern.sub(replacement, out)
+    return out
+
+
+def _as_text(value) -> str:
+    """Best-effort rendering of a help value that may be a string, dict or list."""
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value.strip()
+    if isinstance(value, dict):
+        parts = []
+        for k in ("what", "does", "text", "summary", "blurb", "body", "tip", "note",
+                  "range", "why_change", "why_not"):
+            v = value.get(k)
+            if isinstance(v, str) and v.strip():
+                parts.append(v.strip())
+        if not parts:
+            parts = [v.strip() for v in value.values()
+                     if isinstance(v, str) and v.strip()]
+        return "\n".join(parts)
+    if isinstance(value, (list, tuple)):
+        return "\n".join(p for p in (_as_text(v) for v in value) if p)
+    return str(value)
+
+
+def _lookup(mapping, keys, fallback: str = "") -> str:
+    """First non-empty entry for any of `keys` in a help mapping (or `fallback`)."""
+    if isinstance(mapping, dict):
+        for key in (keys if isinstance(keys, (list, tuple)) else (keys,)):
+            if key in mapping:
+                text = _as_text(mapping[key])
+                if text:
+                    return text
+    return fallback
+
+
+def _mode_cards() -> dict:
+    raw = getattr(helpmod, "MODE_CARDS", None) or {}
+    out = {}
+    for key in MODE_ORDER:
+        card = dict(MODE_CARDS_FALLBACK[key])
+        card["key"] = key
+        got = raw.get(key) if isinstance(raw, dict) else None
+        if isinstance(got, dict):
+            for name, value in got.items():
+                if value not in (None, "", [], {}):
+                    card[name] = value
+        out[key] = card
+    return out
+
+
+def _setting_help() -> dict:
+    fallback = {}
+    for table in (AGENT_FIELDS_GUI, LLM_FIELDS_GUI):
+        for name, _kind, note in table:
+            fallback.setdefault(name, {"what": name, "does": note or "", "range": "",
+                                       "why_change": "", "why_not": "", "tips": []})
+    raw = getattr(helpmod, "SETTING_HELP", None) or {}
+    out = dict(fallback)
+    if isinstance(raw, dict):
+        for name, value in raw.items():
+            base = dict(fallback.get(name, {"what": name, "does": "", "range": "",
+                                            "why_change": "", "why_not": "", "tips": []}))
+            if isinstance(value, dict):
+                for k, v in value.items():
+                    if v not in (None, "", [], {}):
+                        base[k] = v
+            elif value not in (None, ""):
+                base["does"] = str(value)
+            out[name] = base
+    return out
+
+
+MODE_CARDS = _mode_cards()
+SETTING_HELP = _setting_help()
+GROUP_HELP = getattr(helpmod, "GROUP_HELP", None) or {}
+MODEL_HELP = getattr(helpmod, "MODEL_HELP", None) or {}
+SHIM_HELP = getattr(helpmod, "SHIM_HELP", None) or {}
+
+
+def setting_tip(field: str, fallback: str = "") -> str:
+    """Hover text for one setting, built from vaudville_help.SETTING_HELP:
+    what it is, what it does, the range, the tips, and when (not) to touch it.
+    Help-module copy is used verbatim."""
+    entry = SETTING_HELP.get(field)
+    parts: list[str] = []
+    if isinstance(entry, dict):
+        for key in ("what", "does"):
+            value = _as_text(entry.get(key))
+            if value and value not in parts:
+                parts.append(value)
+        rng = _as_text(entry.get("range"))
+        if rng:
+            parts.append("Range: " + rng)
+        tips = entry.get("tips") or []
+        if isinstance(tips, (list, tuple)):
+            for tip in list(tips)[:4]:
+                if isinstance(tip, (list, tuple)):
+                    cells = [str(c).strip() for c in tip if str(c).strip()]
+                    if len(cells) > 1:
+                        parts.append("· " + cells[0] + " — " + " ".join(cells[1:]))
+                    elif cells:
+                        parts.append("· " + cells[0])
+                elif str(tip).strip():
+                    parts.append("· " + str(tip).strip())
+        for key, lead in (("why_change", "Worth changing when: "),
+                          ("why_not", "Leave it alone: ")):
+            value = _as_text(entry.get(key))
+            if value:
+                parts.append(lead + value)
+    text = "\n".join(p for p in parts if p)
+    if not text:
+        text = _as_text(entry) or T(fallback) or field
+    return text
+
+
+def help_line(mapping, keys, fallback: str = "") -> str:
+    """Verbatim help-module copy for `keys`, else `fallback` (already final text)."""
+    if isinstance(mapping, str) and mapping.strip():
+        return mapping.strip()
+    text = _lookup(mapping, keys, "")
+    return text or fallback
+
+
+# --------------------------------------------------------------------------- #
+# character groups (vaudville_cast.py, with a single "all characters" fallback)
+# --------------------------------------------------------------------------- #
+def all_group_key() -> str:
+    return str(getattr(cast, "ALL_KEY", None) or "all")
+
+
+def cast_groups() -> list[dict]:
+    raw = getattr(cast, "CAST_GROUPS", None) if cast is not None else None
+    return [g for g in (raw or []) if isinstance(g, dict) and g.get("key")]
+
+
+def group_choices() -> list[tuple[str, str]]:
+    """[(key, label)] for the group dropdown: "All characters" first."""
+    out = [(all_group_key(), "All characters")]
+    for g in cast_groups():
+        key = str(g["key"])
+        if key == all_group_key():
+            continue
+        out.append((key, str(g.get("label") or key)))
+    return out
+
+
+def group_label(key) -> str:
+    k = normalize_group(key)
+    if k is None:
+        return "All characters"
+    for g in cast_groups():
+        if str(g.get("key")) == k:
+            return str(g.get("label") or k)
+    return k.replace("_", " ").replace("-", " ").strip().title() or k
+
+
+def normalize_group(key):
+    """None means "every character"; anything else is a concrete group key."""
+    if key is None:
+        return None
+    k = str(key).strip()
+    if not k or k.lower() in (all_group_key().lower(), "all", "everyone", "everybody"):
+        return None
+    return k
+
+
+def group_files(key) -> set[str]:
+    """Asset file names that hold this group's characters (empty = unknown)."""
+    k = normalize_group(key)
+    if k is None:
+        return set()
+    files: set[str] = set()
+    for g in cast_groups():
+        if str(g.get("key")) == k:
+            files |= {str(f) for f in (g.get("files") or []) if str(f).strip()}
+    if not files:
+        table = getattr(cast, "GROUP_OF_FILE", None) if cast is not None else None
+        if isinstance(table, dict):
+            files |= {str(f) for f, gk in table.items() if str(gk) == k}
+    return files
+
+
+def group_known(key) -> bool:
+    k = normalize_group(key)
+    if k is None:
+        return True
+    if any(str(g.get("key")) == k for g in cast_groups()):
+        return True
+    return bool(group_files(k))
+
+
+def group_characters(key) -> list[str]:
+    k = normalize_group(key)
+    names: list[str] = []
+    for g in cast_groups():
+        if k is None or str(g.get("key")) == k:
+            for n in (g.get("characters") or []):
+                if str(n).strip() and str(n) not in names:
+                    names.append(str(n))
+    return names
+
+
+def group_note(key) -> str:
+    k = normalize_group(key)
+    for g in cast_groups():
+        if str(g.get("key")) == k:
+            note = _as_text(g.get("note"))
+            if note:
+                return note
+    return ""
+
+
+def _file_matches(filename: str, pattern: str) -> bool:
+    f = str(filename).replace("\\", "/").rsplit("/", 1)[-1]
+    p = str(pattern).replace("\\", "/").rsplit("/", 1)[-1]
+    if not f or not p:
+        return False
+    if f == p:
+        return True
+    stem = p[:-len(".assets")] if p.endswith(".assets") else p
+    return bool(stem) and (f == stem or f.startswith(stem + "."))
+
+
+def blob_in_group(blob, key) -> bool:
+    """Does this component belong to the selected group?  Unknown group -> True
+    (fail safe: never silently drop an edit)."""
+    k = normalize_group(key)
+    if k is None:
+        return True
+    patterns = group_files(k)
+    if not patterns:
+        return True
+    path = getattr(blob, "path", None)
+    name = getattr(path, "name", None) or str(path or "")
+    return any(_file_matches(name, p) for p in patterns)
+
+
+def group_blobs(res, key) -> list:
+    return [b for b in getattr(res, "agents", []) if blob_in_group(b, key)]
+
+
+def evidence_text() -> str:
+    """Optional long-form backing for the group list (vaudville_cast.EVIDENCE)."""
+    return _as_text(getattr(cast, "EVIDENCE", None) if cast is not None else None)
+
+
+def is_llama3_8b_family(name) -> bool:
+    """True for GGUFs from the family Local Mode - Basic is limited to."""
+    flat = re.sub(r"[^a-z0-9]", "", str(name).lower())
+    return "llama38binstruct" in flat
+
+
+def friendly_count(n: int, one: str, many: str) -> str:
+    return f"{n} {one if n == 1 else many}"
 
 
 def _user_dirs() -> tuple[Path, Path, Path]:
@@ -292,6 +723,13 @@ def load_config() -> dict:
         "llm_params": {},
         "primary_model": "",
         "deck_model": "",
+        # GUI state: which setup was confirmed on the Home page, which character
+        # group the Characters tab edits, and the Local-Advanced server address.
+        "mode_confirmed": False,
+        "cast_group": all_group_key(),
+        "shim_backend_url": "",
+        "direct_host": "",
+        "direct_port": 0,
     }
     try:
         if CONFIG_FILE.exists():
@@ -780,6 +1218,19 @@ class ScanResult:
         parts = [f"{n}: {c['LLM']} LLM / {c['AGENT']} agents" for n, c in sorted(per_file.items())]
         return "; ".join(parts) or "no LLMUnity components found"
 
+    def friendly_summary(self) -> str:
+        """One plain-English line about what the scan found.
+
+        `summary()` is the per-file component table: right for a log file or
+        `--cli scan`, and exactly the jargon the GUI should not show."""
+        if not self.blobs:
+            return T("no AI settings found in this folder")
+        files = {b.path.name for b in self.blobs}
+        return (T("settings for ") +
+                friendly_count(len(self.agents), "character", "characters") + T(" and ") +
+                friendly_count(len(self.llm), "AI engine block", "AI engine blocks") +
+                T(" in ") + friendly_count(len(files), "game file", "game files"))
+
 
 def scan_game(game_dir: Path, use_profile: bool = True, progress=None) -> ScanResult:
     t0 = time.time()
@@ -810,9 +1261,9 @@ def scan_game(game_dir: Path, use_profile: bool = True, progress=None) -> ScanRe
     save_profile(game_dir, new_profile)
     res.duration = time.time() - t0
     if not res.llm:
-        res.notes.append("no LLMUnity.LLM component found — is this the right build?")
+        res.notes.append("no AI engine block found in this folder — is it the Vaudeville install?")
     if not res.agents:
-        res.notes.append("no LLMUnity.LLMAgent components found")
+        res.notes.append("no character settings found in this folder")
     return res
 
 
@@ -860,10 +1311,26 @@ def encode_field(kind: str, name: str, fkind: str, old, new) -> bytes:
     raise PatchError(f"field {name} is not patchable (kind {fkind})")
 
 
-def plan_edits(res: ScanResult, agent_changes: dict, llm_changes: dict) -> tuple[list[Edit], list[str]]:
+def plan_edits(res: ScanResult, agent_changes: dict, llm_changes: dict,
+               agent_group=None, group_fields=None) -> tuple[list[Edit], list[str]]:
+    """Byte edits for `agent_changes` (character settings) and `llm_changes` (engine).
+
+    `agent_group` optionally narrows the *character* fields to one cast group,
+    matched through vaudville_cast.GROUP_OF_FILE / CAST_GROUPS[*]["files"] against
+    each component's asset file name.  The endpoint wiring fields (ENDPOINT_FIELDS)
+    still go to every character, so the game never ends up half local / half
+    remote.  None or cast.ALL_KEY keeps the historical uniform behaviour.
+    `group_fields` overrides which fields are narrowed (default: every character
+    field except ENDPOINT_FIELDS).
+    """
     edits: list[Edit] = []
     warnings: list[str] = []
     data_cache: dict[Path, bytes] = {}
+    scoped: set[str] | None = None
+    group_key = normalize_group(agent_group)
+    if group_key is not None and group_known(group_key):
+        scoped = set(group_fields) if group_fields else {
+            n for n, _ in AGENT_LAYOUT if n not in ENDPOINT_FIELDS}
 
     def read_at(path: Path, offset: int, n: int) -> bytes:
         if path not in data_cache:
@@ -874,7 +1341,10 @@ def plan_edits(res: ScanResult, agent_changes: dict, llm_changes: dict) -> tuple
 
     for blob in res.blobs:
         changes = agent_changes if blob.kind == "AGENT" else llm_changes
+        skip = (scoped if (scoped and not blob_in_group(blob, group_key)) else frozenset())
         for name, new in changes.items():
+            if name in skip:
+                continue
             try:
                 fk = field_kind(blob.kind, name)
             except PatchError as exc:
@@ -1684,10 +2154,10 @@ def string_fits(current: str, wanted: str, field: str = "host") -> tuple[bool, s
         allowed = "only an empty string"
     else:
         allowed = f"{max(0, a - 3)}..{a} characters"
-    return False, (f"{field} {wanted!r} is {len(wanted.encode())} bytes, but the shipped value "
-                   f"{current!r} reserves {a} bytes, so in-place patching allows {allowed}. "
-                   f"Use the built-in shim (which keeps {field}={current!r}) or a BepInEx "
-                   f"plugin for arbitrary values.")
+    return False, (f"The {field} box in the game's files has room for {allowed} (the shipped "
+                   f"value {current!r} reserves {a} bytes), but {wanted!r} is "
+                   f"{len(wanted.encode())} bytes. Remote mode's translator has no such limit "
+                   f"and keeps {field}={current!r} for you.")
 
 
 def split_endpoint(url: str, port_override: int = 0) -> tuple[str, int, str, bool]:
@@ -1709,9 +2179,14 @@ def host_fits(current: str, wanted: str) -> tuple[bool, str]:
     return string_fits(current, wanted, "host")
 
 
-def build_change_set(cfg: dict, res: ScanResult, overrides: dict | None = None
-                     ) -> tuple[dict, dict, list[str]]:
-    """Turn the GUI config into {agent_fields}, {llm_fields}, notes."""
+def build_change_set(cfg: dict, res: ScanResult, overrides: dict | None = None,
+                     group=None) -> tuple[dict, dict, list[str]]:
+    """Turn the GUI config into {agent_fields}, {llm_fields}, notes.
+
+    `group` (a vaudville_cast group key, or None/cast.ALL_KEY for everybody) only
+    records the character scope in the notes here; the actual narrowing of the
+    character fields happens in plan_edits(agent_group=...).
+    """
     agent_changes: dict = {}
     llm_changes: dict = {}
     notes: list[str] = []
@@ -1725,8 +2200,8 @@ def build_change_set(cfg: dict, res: ScanResult, overrides: dict | None = None
 
     if mode == "off":
         agent_changes["remote"] = False
-        notes.append(f"{MODE_LABELS[MODE_OFF]}: agents use the in-process llama.cpp "
-                     f"service (nothing leaves the machine)")
+        notes.append(f"{MODE_LABELS[MODE_OFF]}: the cast uses the engine inside the game "
+                     f"(nothing leaves the machine)")
     elif mode == "shim":
         agent_changes["remote"] = True
         wanted_host = cfg.get("agent_host") or cur_host or "localhost"
@@ -1737,12 +2212,13 @@ def build_change_set(cfg: dict, res: ScanResult, overrides: dict | None = None
         else:
             notes.append("host left unchanged: " + why)
         agent_changes["port"] = int(cfg.get("shim_port", 13333))
-        notes.append(f"{MODE_LABELS[MODE_SHIM]}: agents -> built-in shim on "
-                     f"{wanted_host}:{cfg.get('shim_port',13333)} "
-                     f"-> {cfg.get('backend_url') or '<no BaseURL set>'} "
+        notes.append(f"{MODE_LABELS[MODE_SHIM]}: the cast talks to the built-in translator on "
+                     f"{wanted_host}:{cfg.get('shim_port',13333)}, which forwards every line to "
+                     f"{cfg.get('backend_url') or '<no service address set>'} "
                      f"(model {cfg.get('backend_model') or '-'})")
         if not cfg.get("backend_url"):
-            notes.append("WARNING: no remote BaseURL configured — the shim will fail every request")
+            notes.append("WARNING: no service address set — the translator will fail every "
+                           "request until you give it one")
         if cfg.get("api_key") and not cfg.get("save_api_key"):
             notes.append("API key is held in memory/env only (not written to the config file)")
     elif mode == "direct":
@@ -1751,31 +2227,37 @@ def build_change_set(cfg: dict, res: ScanResult, overrides: dict | None = None
         host, port, path, tls = split_endpoint(url, int(cfg.get("direct_port", 0) or 0))
         problems = []
         if not host:
-            problems.append(f"BLOCKED ({MODE_LABELS[MODE_DIRECT]}): no host in the BaseURL")
+            problems.append(f"BLOCKED ({MODE_LABELS[MODE_DIRECT]}): no server address was "
+                            "given — fill in the address on the Remote page first, or choose "
+                            "a different setup")
         if path:
             problems.append(
-                f"BLOCKED ({MODE_LABELS[MODE_DIRECT]}): LlamaLib hands the host string straight to cpp-httplib "
-                "and appends /completion, /health, /apply-template … itself, so a path prefix "
-                f"like {path!r} is not supported. Give host[:port] only, or use the shim.")
+                f"BLOCKED ({MODE_LABELS[MODE_DIRECT]}): the game's built-in engine hands the "
+                "address straight to its own web client and adds /completion, /health, "
+                f"/apply-template … itself, so a path prefix like {path!r} is not supported. "
+                "Give host[:port] only, or use Remote mode, whose translator holds the full "
+                "address for you.")
         if tls:
             problems.append(
-                f"BLOCKED ({MODE_LABELS[MODE_DIRECT]}): TLS needs the literal string 'https://<host>' inside the "
-                "host field (LlamaLib strips the scheme and switches to SSLClient). That is 8 "
-                "extra bytes and cannot fit the in-place 'localhost' slot — use the shim "
-                "(which can do TLS for you) or a BepInEx plugin.")
+                f"BLOCKED ({MODE_LABELS[MODE_DIRECT]}): a padlocked https address needs the "
+                "literal text 'https://<host>' inside the address field (the game's engine "
+                "strips the scheme and switches to its secure client). That is 8 extra bytes "
+                "and cannot fit the reserved 'localhost' space — use Remote mode, whose "
+                "translator can do the padlock for you.")
         ok, why = host_fits(cur_host, host)
         if not ok:
             problems.append(f"BLOCKED ({MODE_LABELS[MODE_DIRECT]}): " + why)
         if problems:
             notes.extend(problems)
-            notes.append(f"Switch to '{MODE_LABELS[MODE_SHIM]}' — it keeps host=localhost "
-                         f"and holds the real BaseURL / model / API key itself.")
+            notes.append(f"Switch to '{MODE_LABELS[MODE_SHIM]}' — it keeps the game pointing "
+                         f"at this computer and holds the real address, model name and "
+                         f"password itself.")
         else:
             agent_changes["host"] = host
             agent_changes["port"] = port
-            notes.append(f"{MODE_LABELS[MODE_DIRECT]}: agents -> http://{host}:{port} directly "
-                         f"(the server must speak the "
-                         f"llama.cpp protocol: /health /apply-template /completion /tokenize)")
+            notes.append(f"{MODE_LABELS[MODE_DIRECT]}: the cast talks straight to "
+                         f"http://{host}:{port} (that server must speak the llama.cpp "
+                         f"protocol: /health /apply-template /completion /tokenize)")
         if cfg.get("api_key"):
             cur_key = res.agents[0].values.get("APIKey", "") if res.agents else ""
             okk, whyk = string_fits(cur_key, cfg["api_key"], "APIKey")
@@ -1786,6 +2268,22 @@ def build_change_set(cfg: dict, res: ScanResult, overrides: dict | None = None
     else:
         notes.append(f"unknown mode {mode!r} — expected one of: "
                      + ", ".join(MODE_LABELS[m] for m in MODE_ORDER))
+
+    group_key = normalize_group(group)
+    if group_key is not None:
+        label = group_label(group_key)
+        if not group_known(group_key):
+            notes.append(f"character group {label!r} is unknown (the character list is not "
+                         f"available here) — these edits will go to every character")
+        else:
+            hits = group_blobs(res, group_key)
+            files = sorted(group_files(group_key))
+            notes.append(f"character scope: {label} — {len(hits)} of {len(res.agents)} "
+                         f"characters" + (f" (settings live in {', '.join(files)})" if files
+                                         else ""))
+            if files and not hits:
+                notes.append(f"WARNING: no character settings found for {label!r} in the last "
+                             f"scan — re-scan, or choose 'All characters'")
 
     if cfg.get("expose_server"):
         llm_changes["remote"] = True
@@ -1805,9 +2303,9 @@ def build_change_set(cfg: dict, res: ScanResult, overrides: dict | None = None
             notes.append(f"unknown parameter {key!r} ignored")
 
     if agent_changes.get("remote") and mode in ("shim", "direct"):
-        notes.append("NOTE: the boot screen waits for the LOCAL model to start "
-                     "(OffWorldInit.CheckLoading -> LLM.started), so keep a small GGUF "
-                     "linked as the main model, or the loading screen will hang.")
+        notes.append("NOTE: the loading screen waits for the on-machine model to start, so "
+                     "keep a small model file linked as the main model or the boot screen "
+                     "will hang.")
     return agent_changes, llm_changes, notes
 
 
@@ -1955,6 +2453,200 @@ def free_port(host: str = "127.0.0.1") -> int:
 # --------------------------------------------------------------------------- #
 # self-test
 # --------------------------------------------------------------------------- #
+# --- self-test helpers (used only by selftest() and the checks it runs) ----- #
+# The three setup cards exactly as the project owner mandated them.  This is a
+# deliberate SECOND copy of the text: vaudville_help.py holds what the UI
+# renders, this holds what was asked for, and the self-test fails the moment
+# they drift — including a "helpful" fix of the upstream `communcation`
+# spelling or of the two mandated double spaces.
+MODE_CARD_COPY = {
+    MODE_OFF: {
+        "title": "Local Mode - Basic",
+        "blurb": ("Vaudville Configurator manages the AI model file for the game.  "
+                  "Download new GGUF Models from Huggingface and let Vaudville "
+                  "Configurator manage everything else!"),
+        "difficulty": "Low",
+        "restrictions": ("GGUF File, must be related to or created from "
+                         "`Meta-Llama-3-8B-Instruct` (not 3.1 or later) only!"),
+    },
+    MODE_DIRECT: {
+        "title": "Local Mode - Advanced",
+        "blurb": ("Vaudville Configurator replaces the outdated and hardcoded "
+                  "Llamalib built into the game, with the latest llama.cpp release "
+                  "and allows you to select any GGUF model and tune all the "
+                  "parameters!"),
+        "difficulty": "Moderate",
+        "restrictions": ("Must be a GGUF File compatible with latest llama.cpp, "
+                         "must fit into local computer VRAM along with game!"),
+    },
+    MODE_SHIM: {
+        "title": "Remote Mode - OpenAI API Compatible Endpoint",
+        "blurb": ("Vaudville Configurator intercepts the communcation with the "
+                  "outdated and hardcoded Llamalib built into the game, and lets "
+                  "you enter any Local or Remote OpenAI Compatible API Endpoint.  "
+                  "vLLM / SGLang / Llama.cpp / ExLlamaV3 / Ollama / OpenAI / Custom"),
+        "difficulty": "Moderate to Difficult depending on Self Hosting or Remote API.",
+        "restrictions": "Only that the endpoint must support OpenAI API Chat Completions!",
+    },
+}
+# the setting grids the GUI actually lays out, and the component each belongs to
+GUI_FIELD_GRIDS = (("AGENT", CHARACTER_FIELDS), ("LLM", ENGINE_FIELDS))
+# what every SETTING_HELP entry has to carry for a tooltip to be useful
+HELP_ENTRY_KEYS = ("what", "does", "why_change", "why_not", "range", "tips")
+# the asset files that hold characters (level4..level13 = the 10 locations,
+# sharedassets18.assets = the Story Editor / Workshop roles)
+EXPECTED_AGENT_FILES = [f"level{n}" for n in range(4, 14)] + ["sharedassets18.assets"]
+# tab names the pre-rebuild GUI used, which must keep working
+LEGACY_TAB_NAMES = {"game": "home", "start": "home", "welcome": "home",
+                    "off": "basic", "models": "basic", "model": "basic",
+                    "direct": "advanced", "shim": "remote", "openai": "remote",
+                    "parameters": "characters", "params": "characters",
+                    "cast": "characters", "restore": "backup", "backups": "backup"}
+
+
+def _st_visible_tabs(mode) -> list:
+    """The tab set the notebook shows: Home alone until a setup has been
+    confirmed on the Home page, then Home + that setup + Characters + Backup."""
+    if mode not in TAB_OF_MODE:
+        return ["home"]
+    return ["home", TAB_OF_MODE[mode], "characters", "backup"]
+
+
+def _st_probe_argv(extra: list) -> list:
+    """Command line for a child run of this same program (frozen-aware)."""
+    if getattr(sys, "frozen", False):
+        return [sys.executable, *extra]
+    return [sys.executable, str(Path(__file__).resolve()), *extra]
+
+
+def _st_gui_check(config: dict, tab: str = ""):
+    """Build the real GUI through the existing withdrawn `--gui-check` path and
+    report what the notebook actually holds.
+
+    `--gui-check` withdraws the window before it is ever mapped, so nothing
+    appears on anybody's desktop, and it skips the game scan.  The child runs in
+    a throwaway XDG home, so the caller's own config is neither read nor
+    written.
+
+    Returns ``(probe, problem, skip)``:
+
+    * ``probe``   ``(tabs, frames_built, visible_keys)`` when the child printed
+      its banner, else ``None``.  ``visible_keys`` are tab keys in build order,
+      so a caller can assert *which* tabs were revealed, not merely how many.
+    * ``problem`` non-empty when the child ran and misbehaved (crashed, exited
+      non-zero, or reworded its banner).  That is a FAILURE, never a skip.
+    * ``skip``    non-empty only when this environment cannot run a GUI check at
+      all (no tkinter, no child interpreter).  The caller may then skip the
+      section out loud."""
+    import tempfile
+    try:
+        import tkinter                                         # noqa: F401
+    except Exception as exc:                                   # noqa: BLE001
+        return None, "", f"tkinter is not importable here ({type(exc).__name__}: {exc})"
+    try:
+        with tempfile.TemporaryDirectory(prefix="vaudville-selftest-ui-") as td:
+            env = dict(os.environ)
+            env["XDG_CONFIG_HOME"] = str(Path(td) / "config")
+            env["XDG_DATA_HOME"] = str(Path(td) / "data")
+            env["XDG_STATE_HOME"] = str(Path(td) / "state")
+            for var in ("XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME"):
+                Path(env[var]).mkdir(parents=True, exist_ok=True)
+            cdir = Path(env["XDG_CONFIG_HOME"]) / APP_SLUG
+            cdir.mkdir(parents=True, exist_ok=True)
+            (cdir / "config.json").write_text(json.dumps(config), encoding="utf-8")
+            argv = ["--gui-check"] + (["--tab", tab] if tab else [])
+            proc = subprocess.run(_st_probe_argv(argv), env=env, capture_output=True,
+                                  text=True, timeout=60)
+            out = (proc.stdout or "") + "\n" + (proc.stderr or "")
+            m = re.search(r"GUI built OK \(withdrawn\); tabs: (\d+) \(built: (\d+)", out)
+            v = re.search(r"\| visible: ([^)]*)\)", out)
+            if not m or not v:
+                return (None,
+                        f"the child printed no usable banner (exit {proc.returncode}); "
+                        f"last output: {out.strip()[-240:] or '(empty)'}", "")
+            probe = (int(m.group(1)), int(m.group(2)),
+                     [k.strip() for k in v.group(1).split(",") if k.strip()])
+            problem = "" if proc.returncode == 0 else f"the child exited {proc.returncode}"
+            return probe, problem, ""
+    except subprocess.TimeoutExpired:
+        return None, "the --gui-check child timed out after 60s", ""
+    except OSError as exc:
+        return None, "", f"no child interpreter could be started here ({exc})"
+    except Exception as exc:                                   # noqa: BLE001
+        return None, f"the --gui-check child broke: {type(exc).__name__}: {exc}", ""
+
+
+def _st_deck_exemption():
+    """Does the Basic-mode model panel leave the shipped Steam Deck file alone?
+
+    The rule lives inside gui_main's refresh_models(), which needs a Tk root, so
+    the shipped condition is lifted out of the source and evaluated here against
+    three slot/target combinations.  Returns (ok, detail), or None when the
+    source cannot be read (a frozen single-file build ships no .py)."""
+    import inspect
+    from types import SimpleNamespace
+    try:
+        src = inspect.getsource(gui_main)
+    except Exception:                                          # noqa: BLE001
+        return None
+    # Lift BOTH halves of the shipped rule: the outer "would this panel warn at
+    # all" guard and the inner Steam Deck exemption.  Re-implementing either by
+    # hand here would let the production copy drift unnoticed.
+    m = re.search(r'if\s+(panel\["restrict"\] and [\s\S]*?):[ \t]*\n'
+                  r'[ \t]*if\s+(slot\.name == DECK_MODEL_NAME[\s\S]*?):[ \t]*\n[ \t]*pass',
+                  src)
+    if not m:
+        return (False, "no Basic-mode model warning guard left in gui_main — if "
+                       "refresh_models() was refactored, update _st_deck_exemption() "
+                       "in the self-test")
+    outer = " ".join(re.sub(r"\\\s+", " ", m.group(1)).split())
+    exempt_cond = " ".join(re.sub(r"\\\s+", " ", m.group(2)).split())
+
+    def warns(slot_name: str, target: str):
+        """(would the restricted Basic panel flag this slot?, evaluation error)."""
+        ns = {"slot": SimpleNamespace(name=slot_name), "st": {"target": target},
+              "panel": {"restrict": True}, "Path": Path,
+              "DECK_MODEL_NAME": DECK_MODEL_NAME,
+              "is_llama3_8b_family": is_llama3_8b_family}
+        try:
+            flagged = bool(eval(outer, {"__builtins__": {}}, ns))       # noqa: S307
+            exempt = (bool(eval(exempt_cond, {"__builtins__": {}}, ns))  # noqa: S307
+                      if flagged else False)
+        except Exception as exc:                                         # noqa: BLE001
+            return True, (f"the lifted condition could not be evaluated here: "
+                          f"{type(exc).__name__}: {exc}")
+        return flagged and not exempt, ""
+
+    cases = [(DECK_MODEL_NAME, f"/models/{DECK_MODEL_NAME}", False,
+              "the shipped deck file must stay unflagged"),
+             (PRIMARY_MODEL_NAME, f"/models/{PRIMARY_MODEL_NAME}", False,
+              f"an in-family {LLAMA3_8B_FAMILY} file in the main slot must not warn"),
+             (DECK_MODEL_NAME, "/models/Mistral-7B-Instruct-v0.3.gguf", True,
+              "a different file linked into the deck slot must still warn"),
+             (PRIMARY_MODEL_NAME, "/models/Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf", True,
+              "Llama-3.1 in the main slot must still warn")]
+    bad = []
+    for name, tgt, want, why in cases:
+        got, err = warns(name, tgt)
+        if err:
+            bad.append(err)
+        elif got != want:
+            bad.append(why)
+    return (not bad, ("; ".join(dict.fromkeys(bad)) if bad
+                      else f"{len(cases)} slot/target cases against the shipped guard "
+                           f"`{outer}` / `{exempt_cond}`"))
+
+
+def _st_agent_file_counts(res) -> dict:
+    """Agent blobs per asset file name, exactly as the scanner saw them."""
+    counts: dict = {}
+    for blob in getattr(res, "agents", []):
+        name = getattr(getattr(blob, "path", None), "name", "") or ""
+        if name:
+            counts[name] = counts.get(name, 0) + 1
+    return counts
+
+
 def selftest(game_dir: Path | None, live: bool, verbose: bool = True,
              ci: bool = False) -> int:
     results: list[tuple[bool, str]] = []
@@ -2014,9 +2706,263 @@ def selftest(game_dir: Path | None, live: bool, verbose: bool = True,
     check(wk == {} or set(wk) == {"creationflags"}, f"windows detach kwargs: {wk}")
     check(isinstance(wd, list), f"windows steam-dir probe safe off-windows: {wd}")
     vfile = Path(__file__).resolve().parent / "VERSION"
-    if vfile.is_file() and not getattr(sys, "frozen", False):
-        check(vfile.read_text().strip() == APP_VERSION,
-              f"VERSION file ({vfile.read_text().strip()}) matches APP_VERSION ({APP_VERSION})")
+    if getattr(sys, "frozen", False):
+        check(True, "skipped — a frozen single-file build carries no VERSION file beside it")
+    else:
+        onfile = vfile.read_text().strip() if vfile.is_file() else "MISSING"
+        check(vfile.is_file() and onfile == APP_VERSION,
+              f"VERSION file ({onfile}) matches APP_VERSION ({APP_VERSION})")
+
+    print("[0c] sibling data modules (vaudville_cast / vaudville_help)")
+    frozen = bool(getattr(sys, "frozen", False))
+    where = "frozen single-file build" if frozen else "source run"
+    check(cast is not None, f"vaudville_cast imported and in use ({where})")
+    check(helpmod is not None, f"vaudville_help imported and in use ({where})")
+    if frozen:
+        import importlib.util
+        specs = {}
+        for name in ("vaudville_cast", "vaudville_help"):
+            try:
+                specs[name] = importlib.util.find_spec(name) is not None
+            except Exception:                                  # noqa: BLE001
+                specs[name] = False
+        check(all(specs.values()),
+              "both modules are findable by the import machinery inside this frozen "
+              "build (a fresh-interpreter import needs a Python a single-file build "
+              f"does not ship) ({specs})")
+    else:
+        imports = {}
+        here = str(Path(__file__).resolve().parent)
+        cenv = dict(os.environ,
+                    PYTHONPATH=here + os.pathsep + os.environ.get("PYTHONPATH", ""))
+        for name in ("vaudville_cast", "vaudville_help"):
+            proc = subprocess.run([sys.executable, "-c", f"import {name}"], env=cenv,
+                                  capture_output=True, text=True, timeout=60)
+            imports[name] = proc.returncode == 0
+        check(all(imports.values()),
+              "both modules really import in a fresh interpreter running this same "
+              "file, so a bundle that dropped or broke them fails here instead of "
+              f"degrading silently ({imports})")
+    cast_names = ("ALL_KEY", "ALL_LABEL", "CAST_GROUPS", "GROUP_OF_FILE", "CANONICAL_FILES",
+                  "group_of", "LEVELS_ARE_DIFFICULTY", "DIFFICULTY_SCALE",
+                  "SYSTEM_PROMPT_EDITABLE", "PERSONA_NOTE", "FRIENDLY_GROUP_INTRO", "EVIDENCE")
+    help_names = ("MODE_CARDS", "TERMS", "GROUP_HELP", "SETTING_HELP", "MODEL_HELP",
+                  "SHIM_HELP", "CREDIT", "GITHUB_URL")
+    gaps = [n for n in cast_names if cast is None or not hasattr(cast, n)]
+    check(not gaps, f"vaudville_cast exports all {len(cast_names)} contract names"
+                    + (f" — missing: {gaps}" if gaps else ""))
+    gaps = [n for n in help_names if helpmod is None or not hasattr(helpmod, n)]
+    check(not gaps, f"vaudville_help exports all {len(help_names)} contract names"
+                    + (f" — missing: {gaps}" if gaps else ""))
+    raw_cards = getattr(helpmod, "MODE_CARDS", None) or {}
+    check(isinstance(raw_cards, dict) and set(raw_cards) == set(MODE_ORDER)
+          and all(isinstance(raw_cards.get(k), dict)
+                  and all(str(raw_cards[k].get(f) or "").strip()
+                          for f in ("title", "blurb", "difficulty", "restrictions"))
+                  for k in MODE_ORDER),
+          f"MODE_CARDS keys are exactly {sorted(set(MODE_ORDER))} and every card carries "
+          "title/blurb/difficulty/restrictions")
+    raw_help = getattr(helpmod, "SETTING_HELP", None) or {}
+    check(isinstance(raw_help, dict) and len(raw_help) >= 40,
+          f"SETTING_HELP is non-empty ({len(raw_help)} entries)")
+    check(len(TERMS) == len(_TERM_RES) > 0 and T("LLMAgent") == "character agents",
+          f"TERMS compiled ({len(_TERM_RES)} rules) and applied to this file's own strings")
+
+    print("[0d] the three setup cards are byte-identical to the mandated copy")
+    check(set(MODE_CARDS) == set(MODE_ORDER)
+          and all(set(MODE_CARDS[k]) >= {"key", "title", "blurb", "difficulty", "restrictions"}
+                  for k in MODE_ORDER),
+          f"the GUI renders {len(MODE_CARDS)} cards, each with "
+          "key/title/blurb/difficulty/restrictions")
+    for key in MODE_ORDER:
+        card, want = MODE_CARDS[key], MODE_CARD_COPY[key]
+        diff = [f for f in ("title", "blurb", "difficulty", "restrictions")
+                if str(card.get(f)) != want[f]]
+        check(not diff, f"{key!r} card matches the mandated copy verbatim"
+                        + (f" — differs in: {diff}" if diff else ""))
+    check(all(str(MODE_CARDS[k].get("title")) == MODE_LABELS[k] for k in MODE_ORDER),
+          "card titles are exactly the three mode labels")
+    shim_blurb = str(MODE_CARDS[MODE_SHIM].get("blurb"))
+    off_blurb = str(MODE_CARDS[MODE_OFF].get("blurb"))
+    check(shim_blurb.count("communcation") == 1 and "communication" not in shim_blurb,
+          "the upstream `communcation` spelling is preserved — do not 'fix' it")
+    check("game.  Download" in off_blurb and "Endpoint.  vLLM" in shim_blurb,
+          "both mandated double spaces survived (game.<2sp>Download, Endpoint.<2sp>vLLM)")
+
+    print("[0e] help covers every field the GUI lays out")
+    agent_names = [n for n, _ in AGENT_LAYOUT]
+    llm_names = [n for n, _ in LLM_LAYOUT]
+    union = set(agent_names) | set(llm_names)
+    check(set(raw_help) == union,
+          f"SETTING_HELP keys == AGENT_LAYOUT | LLM_LAYOUT names ({len(union)}); "
+          f"missing={sorted(union - set(raw_help))} extra={sorted(set(raw_help) - union)}")
+    check(set(SETTING_HELP) == union,
+          f"the merged SETTING_HELP the GUI reads has the same {len(union)} keys")
+    thin = {n: [k for k in HELP_ENTRY_KEYS if not raw_help.get(n, {}).get(k)]
+            for n in raw_help
+            if any(not raw_help[n].get(k) for k in HELP_ENTRY_KEYS)}
+    check(not thin, "every entry has all of " + "/".join(HELP_ENTRY_KEYS)
+                    + (f" — thin: {thin}" if thin else ""))
+    few = sorted(n for n in raw_help if len(raw_help[n].get("tips") or []) < 2)
+    check(not few, "every entry carries at least 2 tips"
+                   + (f" — 0 or 1 tip: {few}" if few else ""))
+    laid_out = [n for _kind, fields in GUI_FIELD_GRIDS for n in fields]
+    gaps = [n for n in laid_out if not str(setting_tip(n)).strip()]
+    check(set(laid_out) <= union and not gaps,
+          f"all {len(laid_out)} grid fields "
+          f"({' + '.join(f'{len(f)} {k.lower()}' for k, f in GUI_FIELD_GRIDS)}) have a help "
+          f"entry and render a tooltip" + (f" — gaps: {gaps}" if gaps else ""))
+    check(set(CHARACTER_FIELDS) <= set(agent_names) and set(ENGINE_FIELDS) <= set(llm_names)
+          and set(ENDPOINT_FIELDS) <= set(agent_names),
+          "every laid-out field is a real serialized field of the component it edits")
+    check(set(STOCK_CHARACTER_VALUES) == set(CHARACTER_FIELDS),
+          f"reset-to-defaults holds a shipped value for exactly the "
+          f"{len(CHARACTER_FIELDS)} character grid fields")
+
+    print("[0f] cast data and group-scoped patching")
+    if cast is None:
+        check(False, "vaudville_cast did not import, so none of the cast checks ran")
+    else:
+        from types import SimpleNamespace
+        groups = cast_groups()
+        keys = [str(g.get("key")) for g in groups]
+        check(len(groups) == len(set(keys)) == 11,
+              f"{len(groups)} cast groups, unique keys: {', '.join(keys)}")
+        check(all_group_key() not in keys
+              and all_group_key() == str(getattr(cast, "ALL_KEY", "")),
+              f"the {all_group_key()!r} sentinel is a dropdown value, not a group")
+        check(all(str(g.get("label", "")).strip() and g.get("files") and g.get("characters")
+                  and str(g.get("note", "")).strip() for g in groups),
+              "every group has a label, a non-empty file list, characters and a note")
+        total = sum(len(g.get("characters") or []) for g in groups)
+        check(total == 26, f"the groups' character lists sum to 26 (got {total})")
+        canon = list(getattr(cast, "CANONICAL_FILES", []) or [])
+        check(canon == [f for g in groups for f in g["files"]]
+              and len(set(canon)) == len(canon) == len(EXPECTED_AGENT_FILES),
+              f"CANONICAL_FILES is exactly the flattened group file lists "
+              f"({len(canon)} unique) — the list a patch must be scoped to")
+        table = dict(getattr(cast, "GROUP_OF_FILE", {}) or {})
+        check(all(f in table for f in canon) and set(table.values()) <= set(keys)
+              and all_group_key() not in table.values(),
+              f"GROUP_OF_FILE maps all {len(canon)} real files onto group keys "
+              f"({len(table)} entries, the rest being lookup aliases)")
+        alias_bad = [f"level{n}" for n in range(4, 14)
+                     if cast.group_of(f"level{n}.assets") != cast.group_of(f"level{n}")]
+        check(not alias_bad and cast.group_of("sharedassets18.assets") == "workshop"
+              and cast.group_of("level3") is None,
+              "group_of() is alias-tolerant and returns None for an unknown file"
+              + (f" — broken aliases: {alias_bad}" if alias_bad else ""))
+        scope_bad = [k for k in keys
+                     if group_files(k) != {str(f) for g in groups if str(g["key"]) == k
+                                           for f in g["files"]}]
+        check(not scope_bad,
+              "group_files() — what a patch is scoped to — comes from CAST_GROUPS[*]['files']"
+              + (f" — mismatched: {scope_bad}" if scope_bad else ""))
+        check(group_files(None) == set() and group_files(all_group_key()) == set()
+              and all(normalize_group(a) is None
+                      for a in (None, "", "all", "ALL", " everyone ", "everybody")),
+              "'every character' resolves to no file list, so it can never scope a patch "
+              "down to nothing")
+        choices = group_choices()
+        check(choices[0] == (all_group_key(), "All characters")
+              and [k for k, _ in choices[1:]] == keys
+              and all(normalize_group(k) == k for k, _ in choices[1:])
+              and group_label(all_group_key()) == "All characters",
+              f"the dropdown lists 'All characters' first, then the {len(keys)} groups in game "
+              "order, and every entry maps back to a real group key")
+        check(all(group_known(k) for k in keys) and group_known(None)
+              and not group_known("not_a_group"),
+              "group_known() accepts the 11 real keys and 'all', rejects anything else")
+        check(len(group_characters(None)) == 26
+              and sum(len(group_characters(k)) for k in keys) == 26,
+              "group_characters() names 26 characters for 'all' and 26 across the groups")
+        entry_keys = {k for g in groups for k in g}
+        check(entry_keys == {"key", "label", "files", "characters", "note"},
+              f"groups carry display data only {sorted(entry_keys)} — no per-character blob "
+              "index exists, so patching has to stay group-scoped")
+        label_bad = [g["key"] for g in groups
+                     if not re.search(r"\(%d character" % len(g["characters"]),
+                                      str(g["label"]))]
+        check(not label_bad, "each group's label states its own character count"
+                             + (f" — wrong: {label_bad}" if label_bad else ""))
+        check(blob_in_group(SimpleNamespace(path=Path("level4")), "police_station")
+              and not blob_in_group(SimpleNamespace(path=Path("level4")), "morgue")
+              and blob_in_group(SimpleNamespace(path=Path("level4.assets")), "police_station")
+              and blob_in_group(SimpleNamespace(path=Path("sharedassets18.assets")), "workshop")
+              and blob_in_group(SimpleNamespace(path=Path("level4")), None)
+              and blob_in_group(SimpleNamespace(path=Path("level4")), "not_a_group"),
+              "blob_in_group() is file-scoped, alias-tolerant and fails safe (True) for "
+              "'all' and for an unknown group")
+
+    print("[0g] refuted theories stay refuted")
+    check(getattr(cast, "LEVELS_ARE_DIFFICULTY", None) is False,
+          "LEVELS_ARE_DIFFICULTY is False — level4..level13 are locations, not difficulty 0..25")
+    check(getattr(cast, "DIFFICULTY_SCALE", "missing") is None,
+          "DIFFICULTY_SCALE is None — the game has no difficulty scale to offer")
+    check(getattr(cast, "SYSTEM_PROMPT_EDITABLE", None) is False,
+          "SYSTEM_PROMPT_EDITABLE is False — CharacterPrompt.Awake overwrites the agent "
+          "system prompt at load time")
+    check("systemPrompt" in INERT_FIELDS and "advancedOptions" in INERT_FIELDS,
+          f"the GUI lists {sorted(INERT_FIELDS)} as not editable")
+    check(bool(str(getattr(cast, "PERSONA_NOTE", "")).strip()) and bool(evidence_text().strip()),
+          "the cast module says why personas are not editable, and backs it with evidence")
+
+    print("[0h] Basic-mode model family check")
+    check(is_llama3_8b_family(PRIMARY_MODEL_NAME),
+          f"the shipped main model {PRIMARY_MODEL_NAME} IS {LLAMA3_8B_FAMILY} family")
+    check(not is_llama3_8b_family(DECK_MODEL_NAME),
+          f"the shipped Steam Deck fallback {DECK_MODEL_NAME} is NOT that family, so it has "
+          "to be exempted rather than flagged")
+    check(not is_llama3_8b_family("Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf")
+          and not is_llama3_8b_family("Meta-Llama-3.2-3B-Instruct-Q4_K_M.gguf")
+          and is_llama3_8b_family("meta-llama-3-8b-instruct-q5_k_m.gguf"),
+          "the family check rejects Llama-3.1/3.2 and is case/punctuation tolerant for 3-8B")
+    check([s.name for s in model_slots()] == [PRIMARY_MODEL_NAME, DECK_MODEL_NAME],
+          "the two model slots are PRIMARY then DECK, in that order (anchored to real "
+          "files in [3] when an install is present)")
+    exempt = None if frozen else _st_deck_exemption()
+    if exempt is None:
+        check(True, "skipped — " + ("a frozen build ships no source to lift the Basic-mode "
+                                    "warning rule from" if frozen else
+                                    "the Basic-mode warning rule could not be read out of "
+                                    "gui_main") + "; --gui-check builds that panel instead")
+    else:
+        check(exempt[0], f"the Basic-mode panel leaves the shipped deck file alone — "
+                         f"{exempt[1]}")
+
+    print("[0i] tabs, aliases and branding")
+    check(TAB_ORDER == ("home", "basic", "advanced", "remote", "characters", "backup"),
+          "tab order: " + " | ".join(TAB_ORDER))
+    check(set(TAB_ALIASES.values()) == set(TAB_ORDER)
+          and all(normalize_tab(a) == k for a, k in TAB_ALIASES.items()),
+          f"all {len(TAB_ALIASES)} tab aliases normalize onto the {len(TAB_ORDER)} real tabs")
+    check(all(normalize_tab(a) == k for a, k in LEGACY_TAB_NAMES.items())
+          and normalize_tab("nope") == "" and normalize_tab(None) == "",
+          f"the {len(LEGACY_TAB_NAMES)} pre-rebuild tab names still land on the new tabs")
+    check(len(LEGACY_TAB_NAMES) == 14 and len(GUI_FIELD_GRIDS) == 2
+          and len(MODE_CARD_COPY) == 3 and len(EXPECTED_AGENT_FILES) == 11,
+          "this suite's own fixtures are still full size (14 legacy tab names, 2 field "
+          "grids, 3 mandated cards, 11 character files) — shrinking one would quietly "
+          "shrink what is verified")
+    check(TAB_OF_MODE == {MODE_OFF: "basic", MODE_DIRECT: "advanced", MODE_SHIM: "remote"}
+          and MODE_OF_TAB == {v: k for k, v in TAB_OF_MODE.items()},
+          "each mode owns exactly one tab: "
+          + ", ".join(f"{m}->{TAB_OF_MODE[m]}" for m in MODE_ORDER))
+    check(_st_visible_tabs(None) == ["home"]
+          and all(_st_visible_tabs(m) == ["home", TAB_OF_MODE[m], "characters", "backup"]
+                  for m in MODE_ORDER),
+          "no setup confirmed -> Home only; confirmed -> Home + that setup + Characters + Backup")
+    check(len({tab_title(k) for k in TAB_ORDER}) == len(TAB_ORDER)
+          and all(tab_title(k).strip() for k in TAB_ORDER)
+          and all(tab_title(TAB_OF_MODE[m]).strip() == MODE_LABELS[m].strip()
+                  for m in MODE_ORDER),
+          "every tab has its own non-empty title and the mode tabs use the mode label")
+    check(CREDIT == "MidnightPhreaker + Qwen", f"CREDIT = {CREDIT!r}")
+    check(GITHUB_URL == "https://github.com/MidnightPhreaker/Vaudville-Configurator",
+          f"GITHUB_URL = {GITHUB_URL!r}")
+    check(CREDIT == str(getattr(helpmod, "CREDIT", ""))
+          and GITHUB_URL == str(getattr(helpmod, "GITHUB_URL", "")),
+          "the credit and project link come from vaudville_help, not from the local fallback")
 
     print("[1] ThinkStripper")
     cases = [(["<think>secret</think>Hi there!"], "Hi there!"),
@@ -2036,14 +2982,11 @@ def selftest(game_dir: Path | None, live: bool, verbose: bool = True,
 
     print("[2] Steam / game detection")
     found = find_game_dirs()
-    for p, src in found:
-        check(True, f"found {p}  ({src})")
-    if not found:
-        if ci:
-            check(True, "no Vaudeville install here — "
-                          "CI mode skips the game-dependent sections")
-        else:
-            check(False, "no Vaudeville install found")
+    check(bool(found) or ci,
+          f"found {friendly_count(len(found), 'Vaudeville install', 'Vaudeville installs')}"
+          + (": " + "; ".join(f"{p}  ({src})" for p, src in found) if found else
+             (" — acceptable on a CI runner, which skips the game-dependent sections"
+              if ci else " — expected a Steam install on this machine")))
     gd = game_dir or (found[0][0] if found else None)
     if gd is None:
         if not ci:
@@ -2053,6 +2996,23 @@ def selftest(game_dir: Path | None, live: bool, verbose: bool = True,
     if gd is None:
         print("[3] skipped (CI mode: no game install on this runner)")
         print("[4] skipped (CI mode: no game install on this runner)")
+        print("[4b] cast coverage by name (no install here to scan)")
+        gof = cast.group_of if cast is not None else (lambda _n: None)
+        uncovered = [n for n in EXPECTED_AGENT_FILES if gof(n) is None]
+        check(not uncovered,
+              f"GROUP_OF_FILE covers level4..level13 + sharedassets18.assets by name "
+              f"({len(EXPECTED_AGENT_FILES)} files)"
+              + (f" — missing: {uncovered}" if uncovered else ""))
+        declared = {f: len(g["characters"]) for g in cast_groups() for f in g["files"]}
+        check(sorted(declared) == sorted(EXPECTED_AGENT_FILES)
+              and sum(declared.values()) == 26,
+              f"CAST_GROUPS[*]['files'] is exactly those {len(EXPECTED_AGENT_FILES)} files and "
+              f"their character counts sum to {sum(declared.values())}")
+        alias_bad = [f for f in EXPECTED_AGENT_FILES
+                     if not f.endswith(".assets") and gof(f + ".assets") != gof(f)]
+        check(not alias_bad,
+              "every scene file resolves to the same group with and without the .assets alias"
+              + (f" — broken: {alias_bad}" if alias_bad else ""))
     if gd is not None:
         print(f"[3] component scan of {gd}")
         t0 = time.time()
@@ -2060,6 +3020,13 @@ def selftest(game_dir: Path | None, live: bool, verbose: bool = True,
         check(len(res.llm) == 1, f"exactly one LLMUnity.LLM component ({len(res.llm)})")
         check(len(res.agents) > 0, f"{len(res.agents)} LLMUnity.LLMAgent components")
         check(all(b.leftover >= 0 for b in res.blobs), "all blobs decoded without over-read")
+        observed = {Path(st["target"]).name
+                    for st in (slot_status(gd, s) for s in model_slots()) if st["target"]}
+        check(not observed or observed <= {PRIMARY_MODEL_NAME, DECK_MODEL_NAME},
+              "the model files this install really points at are the two names the build "
+              "hard-codes" + (f": {', '.join(sorted(observed))}" if observed else
+                              " (no model file is linked here, so there is nothing to "
+                              "anchor to)"))
         if res.llm:
             m = res.llm[0].values["model"]
             check(m.lower().endswith(".gguf"), f"LLM.model = {m!r}")
@@ -2081,6 +3048,24 @@ def selftest(game_dir: Path | None, live: bool, verbose: bool = True,
         check(all(len(e.new) == len(e.old) for e in edits), "every edit is size-preserving")
         for w in warnings:
             check(False, f"planning warning: {w}")
+
+        print("[4b] cast coverage of this install")
+        gof = cast.group_of if cast is not None else (lambda _n: None)
+        counts = _st_agent_file_counts(res)
+        uncovered = sorted(n for n in counts if gof(n) is None)
+        check(bool(counts) and not uncovered,
+              f"GROUP_OF_FILE covers all {len(counts)} agent-bearing files the scanner found "
+              f"({sum(counts.values())} agents)"
+              + (f" — uncovered: {uncovered}" if uncovered else ""))
+        declared = {f: len(g["characters"]) for g in cast_groups() for f in g["files"]}
+        wrong = {n: (c, declared.get(n)) for n, c in counts.items() if declared.get(n) != c}
+        check(set(counts) == set(declared) and not wrong,
+              "agents found per file match each group's character count "
+              f"({', '.join(f'{n}={c}' for n, c in sorted(counts.items()))})"
+              + (f" — mismatched (found, declared): {wrong}" if wrong else ""))
+        check(sorted(counts) == sorted(EXPECTED_AGENT_FILES),
+              "the install's agent-bearing files are exactly level4..level13 + "
+              "sharedassets18.assets")
 
     print("[5] shim protocol (in-process)")
     counter: dict = {"calls": 0}
@@ -2195,6 +3180,62 @@ def selftest(game_dir: Path | None, live: bool, verbose: bool = True,
             finally:
                 shim3.shutdown(); shim3.server_close()
                 mock3.shutdown(); mock3.server_close()
+
+    print("[8] UI structure, through the withdrawn --gui-check build")
+    display = bool(os.environ.get("DISPLAY")) or IS_WINDOWS or IS_MACOS
+    gui_probed = False
+    if display:
+        probe, problem, skip = _st_gui_check({"mode": MODE_OFF, "mode_confirmed": False}, "")
+    else:
+        probe, problem, skip = None, "", "this process has no display to draw on"
+    if probe is None and skip:
+        check(True, "skipped — " + skip + ", so no window was built "
+                    "(the tab map itself is verified in [0i])")
+    else:
+        check(probe is not None and not problem,
+              "the --gui-check child built a window and reported its tabs"
+              + (f" — {problem}" if problem else ""))
+        gui_probed = probe is not None
+        if probe is not None:
+            check(probe[1] == len(TAB_ORDER),
+                  f"the GUI builds all {probe[1]} tab frames: {', '.join(TAB_ORDER)}")
+            want = _st_visible_tabs(None)
+            check(probe[0] == len(want) and probe[2] == want,
+                  "with no setup confirmed the notebook holds Home only — showed "
+                  f"({', '.join(probe[2]) or 'nothing'})")
+            for mode in MODE_ORDER:
+                want = _st_visible_tabs(mode)
+                got, prob, _skip = _st_gui_check({"mode": mode, "mode_confirmed": True},
+                                                 TAB_OF_MODE[mode])
+                check(got is not None and got[2] == want and got[1] == len(TAB_ORDER),
+                      f"confirming {mode_label(mode)} reveals exactly ({', '.join(want)})"
+                      f" — got ({', '.join(got[2]) if got else (prob or 'no build')})")
+            for tab in ("characters", "backup"):
+                want = _st_visible_tabs(MODE_SHIM)
+                got, prob, _skip = _st_gui_check({"mode": MODE_SHIM, "mode_confirmed": True},
+                                                 tab)
+                check(got is not None and got[2] == want and got[1] == len(TAB_ORDER),
+                      f"--tab {tab} keeps Home + the setup tab + Characters + Backup"
+                      f" — got ({', '.join(got[2]) if got else (prob or 'no build')})")
+            want = _st_visible_tabs(MODE_OFF)
+            got, prob, _skip = _st_gui_check({"mode": MODE_OFF, "mode_confirmed": False},
+                                             "models")
+            check(got is not None and got[2] == want,
+                  "a pre-rebuild --tab name still opens its new tab"
+                  f" — got ({', '.join(got[2]) if got else (prob or 'no build')})")
+
+    # A section that declines to run must say so out loud.  Every legitimate
+    # decline above emits a message starting with "skipped", and how many there
+    # may be is fully determined by the environment: two in a frozen single-file
+    # build (no VERSION file beside it, no gui_main source to lift) plus one when
+    # no window could be built.  If an edit ever makes checks vanish quietly the
+    # count stops matching and the suite fails instead of reporting a smaller
+    # denominator.
+    skips = [m for _ok, m in results if m.startswith("skipped")]
+    expected_skips = (2 if frozen else 0) + (0 if gui_probed else 1)
+    check(len(skips) == expected_skips,
+          f"{len(skips)} checks declined to run, exactly the {expected_skips} this "
+          f"environment allows" + (f": {'; '.join(s[:70] for s in skips)}" if skips else ""))
 
     passed = sum(1 for ok, _ in results if ok)
     print(f"\n== {passed}/{len(results)} checks passed ==")
@@ -2411,52 +3452,117 @@ def resolve_game_dir(explicit: str | None) -> Path:
 
 
 # --------------------------------------------------------------------------- #
-# GUI (tkinter)
+# GUI (tkinter): tab plumbing, hover tooltips, the window itself
 # --------------------------------------------------------------------------- #
-AGENT_FIELDS_GUI = [
-    ("remote", "bool", "connect to a remote server instead of the local llama.cpp"),
-    ("host", "str", "remote host (in-place patch: length must stay in the same ceil4 bucket)"),
-    ("port", "int", "remote port"),
-    ("APIKey", "str", "sent as 'Authorization: Bearer …' (empty ⇒ keep the key in the shim)"),
-    ("numRetries", "int", "connection retries with 1/2/4/8/16/30 s backoff"),
-    ("numPredict", "int", "max tokens to generate, -1 = unlimited  [sent to remote]"),
-    ("temperature", "float", "0 = deterministic  [sent to remote]"),
-    ("topK", "int", "[sent to remote]"),
-    ("topP", "float", "nucleus sampling  [sent to remote]"),
-    ("minP", "float", "[sent to remote]"),
-    ("repeatPenalty", "float", "1.0 = off  [sent to remote]"),
-    ("repeatLastN", "int", "window for the repeat penalty  [sent to remote]"),
-    ("presencePenalty", "float", "[sent to remote]"),
-    ("frequencyPenalty", "float", "[sent to remote]"),
-    ("typicalP", "float", "1.0 = off  [sent to remote]"),
-    ("mirostat", "int", "0 off / 1 mirostat / 2 mirostat-2  [sent to remote]"),
-    ("mirostatTau", "float", "[sent to remote]"),
-    ("mirostatEta", "float", "[sent to remote]"),
-    ("seed", "int", "0 = random  [sent to remote]"),
-    ("cachePrompt", "bool", "[sent to remote]"),
-    ("ignoreEos", "bool", "[sent to remote]"),
-    ("nProbs", "int", "return top-N probabilities  [sent to remote]"),
-    ("slot", "int", "-1 = auto (remote clients are always forced to -1)"),
-    ("grammar", "str", "GBNF/JSON schema (length-constrained in place)"),
-]
-LLM_FIELDS_GUI = [
-    ("model", "str", "GGUF filename inside StreamingAssets (length-constrained in place)"),
-    ("contextSize", "int", "prompt context in tokens actually used by llama.cpp"),
-    ("maxContextLength", "int", "informational: read back from the model at runtime"),
-    ("minContextLength", "int", "informational"),
-    ("numThreads", "int", "-1 = all cores"),
-    ("numGPULayers", "int", "overridden at boot by the GpuLoad preference / Options slider"),
-    ("batchSize", "int", "prompt processing batch"),
-    ("parallelPrompts", "int", "-1 = auto from the number of clients"),
-    ("flashAttention", "bool", ""),
-    ("reasoning", "bool", "enable the model's 'thinking' mode"),
-    ("remote", "bool", "TRUE ⇒ the game exposes its model as an HTTP server"),
-    ("port", "int", "server port when remote is on"),
-    ("APIKey", "str", "server API key (length-constrained in place)"),
-    ("dontDestroyOnLoad", "bool", ""),
-    ("embeddingsOnly", "bool", ""),
-    ("embeddingLength", "int", ""),
-]
+TAB_OF_MODE = {MODE_OFF: "basic", MODE_DIRECT: "advanced", MODE_SHIM: "remote"}
+MODE_OF_TAB = {v: k for k, v in TAB_OF_MODE.items()}
+TAB_ORDER = ("home", "basic", "advanced", "remote", "characters", "backup")
+TAB_ALIASES = {
+    "home": "home", "start": "home", "welcome": "home", "game": "home",
+    "basic": "basic", "off": "basic", "local": "basic", "local-basic": "basic",
+    "local-mode-basic": "basic", "models": "basic", "model": "basic",
+    "advanced": "advanced", "direct": "advanced", "local-advanced": "advanced",
+    "local-mode-advanced": "advanced",
+    "remote": "remote", "shim": "remote", "openai": "remote", "remote-shim": "remote",
+    "remote-mode": "remote", "endpoint": "remote",
+    "characters": "characters", "character": "characters", "cast": "characters",
+    "groups": "characters", "parameters": "characters", "params": "characters",
+    "backup": "backup", "backups": "backup", "restore": "backup",
+}
+
+
+def normalize_tab(value) -> str:
+    key = re.sub(r"[^a-z0-9]+", "-", str(value or "").strip().lower()).strip("-")
+    return TAB_ALIASES.get(key, "")
+
+
+def tab_title(key: str) -> str:
+    if key in MODE_OF_TAB:
+        return " " + mode_label(MODE_OF_TAB[key]) + " "
+    return {"home": " Home ", "characters": " Characters ",
+            "backup": " Backup / restore "}.get(key, f" {key} ")
+
+
+class ToolTip:
+    """Small hover tooltip: <Enter> schedules it, <Leave>/<ButtonPress> drop it."""
+
+    DELAY_MS = 320
+
+    def __init__(self, widget, text: str, wraplength: int = 460):
+        import tkinter as tk
+        self._tk = tk
+        self.widget = widget
+        self.text = str(text) if text else ""
+        self.wraplength = wraplength
+        self._win = None
+        self._after = None
+        try:
+            widget.bind("<Enter>", self._enter, add="+")
+            widget.bind("<Leave>", self._leave, add="+")
+            widget.bind("<ButtonPress>", self._leave, add="+")
+        except Exception:                        # noqa: BLE001 - never break the build
+            pass
+
+    def set_text(self, text: str) -> None:
+        self.text = str(text) if text else ""
+
+    # -- internals -------------------------------------------------------- #
+    def _enter(self, _event=None):
+        if not self.text:
+            return
+        self._cancel()
+        try:
+            self._after = self.widget.after(self.DELAY_MS, self._popup)
+        except Exception:                        # noqa: BLE001
+            self._after = None
+
+    def _popup(self):
+        self._after = None
+        tk = self._tk
+        try:
+            if not self.text or not self.widget.winfo_exists():
+                return
+            x = self.widget.winfo_rootx() + 14
+            y = self.widget.winfo_rooty() + self.widget.winfo_height() + 8
+            win = tk.Toplevel(self.widget)
+            win.wm_overrideredirect(True)
+            win.wm_geometry(f"+{x}+{y}")
+            tk.Label(win, text=self.text, justify="left", anchor="w",
+                     background="#ffffe1", foreground="#1c1c1c", relief="solid",
+                     borderwidth=1, padx=9, pady=6, wraplength=self.wraplength).pack()
+            self._win = win
+        except Exception:                        # noqa: BLE001
+            self._win = None
+
+    def _leave(self, _event=None):
+        self._cancel()
+        if self._win is not None:
+            try:
+                self._win.destroy()
+            except Exception:                    # noqa: BLE001
+                pass
+            self._win = None
+
+    def _cancel(self):
+        if self._after is not None:
+            try:
+                self.widget.after_cancel(self._after)
+            except Exception:                    # noqa: BLE001
+                pass
+            self._after = None
+
+
+def add_tip(widget, text: str, wraplength: int = 460):
+    """Attach (and keep a reference to) a tooltip.
+
+    Empty text is fine: the tooltip stays invisible until set_text() fills it,
+    which is how the "in use now" and scope lines get their hover text later."""
+    tip = ToolTip(widget, text, wraplength=wraplength)
+    try:
+        widget._vaudville_tip = tip              # keep it alive
+    except Exception:                            # noqa: BLE001
+        pass
+    return tip
 
 
 def gui_main(args) -> int:
@@ -2466,27 +3572,63 @@ def gui_main(args) -> int:
     class App(tk.Tk):
         def __init__(self):
             super().__init__()
-            self.title(f"{APP_NAME} {APP_VERSION} — Vaudeville LLM / endpoint control")
-            self.geometry(getattr(args, "geometry", None) or "1080x760")
-            self.minsize(900, 620)
+            self.title(f"{APP_NAME} {APP_VERSION} — how Vaudeville talks to its AI")
+            self.geometry(getattr(args, "geometry", None) or "1120x800")
+            self.minsize(960, 660)
             self.cfg = load_config()
             self.scan: ScanResult | None = None
-            self.agent_vars: dict[str, tk.StringVar] = {}
-            self.llm_vars: dict[str, tk.StringVar] = {}
-            self._queue: list[str] = []
+            self.agent_vars: dict[str, tk.StringVar] = {}    # Characters tab
+            self.llm_vars: dict[str, tk.StringVar] = {}      # engine tab
+            self.action_buttons: list = []
+            self.tab_frames: dict[str, object] = {}
+            self.plan_boxes: dict[str, object] = {}
+            self.model_panels: list[dict] = []
+            self.mode_cards: dict[str, list] = {}
+            self.extra_overrides: dict = {}
+            self.chosen_mode: str | None = None
+            self._palette()
+            self.current_group = normalize_group(self.cfg.get("cast_group")) or all_group_key()
             self._build()
-            want = (getattr(args, "tab", None) or "").strip().lower()
-            if want:
-                for i in range(self.nb.index("end")):
-                    if self.nb.tab(i, "text").strip().lower().startswith(want):
-                        self.nb.select(i)
-                        break
+            self._startup_tab(args)
             if getattr(args, "quit_after", 0):
                 self.after(int(float(args.quit_after) * 1000), self.destroy)
             if not getattr(args, "gui_check", False):
                 self.after(200, self._initial_scan)
                 self.after(1000, self._poll_running)
             self.protocol("WM_DELETE_WINDOW", self._on_close)
+
+        # ---------- look ---------- #
+        def _rgb(self, color):
+            try:
+                r, g, b = self.winfo_rgb(color)
+                return (r >> 8, g >> 8, b >> 8)
+            except Exception:                                # noqa: BLE001
+                return (240, 240, 240)
+
+        def _hexc(self, rgb) -> str:
+            return "#%02x%02x%02x" % tuple(max(0, min(255, int(c))) for c in rgb)
+
+        def _mix(self, a, b, t: float) -> str:
+            ra, rb = self._rgb(a), self._rgb(b)
+            return self._hexc(tuple(ra[i] * t + rb[i] * (1.0 - t) for i in range(3)))
+
+        def _palette(self):
+            style = ttk.Style(self)
+            if "clam" in style.theme_names():
+                style.theme_use("clam")
+            bg = style.lookup("TFrame", "background") or self.cget("background") or "#efefef"
+            fg = style.lookup("TLabel", "foreground") or "#101010"
+            self.bg, self.fg = bg, fg
+            self.muted = self._mix(fg, bg, 0.45)
+            self.accent = "#1f6feb"
+            self.card_bg = self._mix(fg, bg, 0.035)
+            self.card_bg_on = self._mix(self.accent, bg, 0.16)
+            self.card_edge = self._mix(fg, bg, 0.30)
+            self.card_edge_on = self.accent
+            light = sum(self._rgb(bg)) / 3.0 > 110
+            self.link_fg = "#1f6feb" if light else "#7ab8ff"
+            self.warn_fg = "#b3261e" if light else "#ff9c9c"
+            self.ok_fg = "#1e7d32" if light else "#8fe38f"
 
         # ---------- helpers ---------- #
         def log(self, msg: str):
@@ -2509,7 +3651,7 @@ def gui_main(args) -> int:
             for w in self.action_buttons:
                 try:
                     w.configure(state="disabled" if on else "normal")
-                except Exception:
+                except Exception:                            # noqa: BLE001
                     pass
             if msg:
                 self.status(msg)
@@ -2521,7 +3663,7 @@ def gui_main(args) -> int:
                 try:
                     out = fn()
                     err = None
-                except Exception as exc:            # noqa: BLE001 - report everything
+                except Exception as exc:                     # noqa: BLE001 - report everything
                     out, err = None, exc
                 self.after(0, lambda: self._finish(out, err, done))
             threading.Thread(target=worker, daemon=True).start()
@@ -2530,265 +3672,1044 @@ def gui_main(args) -> int:
             self.busy(False)
             if err is not None:
                 self.log(f"ERROR: {err}")
-                messagebox.showerror(APP_NAME, str(err))
+                messagebox.showerror(APP_NAME, T(str(err)))
                 return
             if done:
                 done(out)
 
         def game_dir(self) -> Path | None:
             p = Path(self.dir_var.get().strip()).expanduser()
-            return p if str(p) else None
+            return p if str(p).strip() else None
+
+        def _int_or(self, var, default: int, what: str) -> int:
+            raw = str(var.get()).strip()
+            if not raw:
+                return int(default)
+            try:
+                return int(raw, 0)
+            except ValueError:
+                self.log(T(f"{what}: “{raw}” is not a whole number — using {default}."))
+                return int(default)
 
         # ---------- build ---------- #
         def _build(self):
-            style = ttk.Style(self)
-            if "clam" in style.theme_names():
-                style.theme_use("clam")
-            self.action_buttons: list = []
-
             top = ttk.Frame(self, padding=(10, 8, 10, 4))
             top.pack(fill="x")
-            ttk.Label(top, text="Game folder:").pack(side="left")
+            lbl = ttk.Label(top, text=T("Game folder:"))
+            lbl.pack(side="left")
+            add_tip(lbl, T("The Vaudeville install folder (the one that contains "
+                           "Vaudeville_Data). Detect finds it for you; Browse… lets you "
+                           "point at a copy somewhere else."))
             self.dir_var = tk.StringVar(value=self.cfg.get("game_dir", ""))
-            ttk.Entry(top, textvariable=self.dir_var).pack(side="left", fill="x", expand=True, padx=6)
-            b = ttk.Button(top, text="Browse…", command=self.browse); b.pack(side="left", padx=2)
-            b = ttk.Button(top, text="Detect", command=self.detect); b.pack(side="left", padx=2)
-            b = ttk.Button(top, text="Re-scan", command=self.rescan); b.pack(side="left", padx=2)
-            self.action_buttons += [b]
-            self.running_lbl = ttk.Label(top, text="", foreground="#a33")
+            entry = ttk.Entry(top, textvariable=self.dir_var)
+            entry.pack(side="left", fill="x", expand=True, padx=6)
+            add_tip(entry, T("Where the game is installed. Nothing is written until you "
+                             "press Apply, and a verified backup is made first."))
+            for text, cmd, tip in (
+                    ("Browse…", self.browse, T("Choose the game folder by hand.")),
+                    ("Detect", self.detect, T("Look for a Steam install of Vaudeville automatically.")),
+                    ("Re-scan", self.rescan, T("Read the game files again and refresh every value shown here."))):
+                b = ttk.Button(top, text=T(text), command=cmd)
+                b.pack(side="left", padx=2)
+                add_tip(b, tip)
+                self.action_buttons.append(b)
+            self.running_lbl = ttk.Label(top, text="", foreground=self.warn_fg)
             self.running_lbl.pack(side="left", padx=8)
+            add_tip(self.running_lbl, T("The game must be closed before its files can be changed."))
 
             self.nb = ttk.Notebook(self)
             self.nb.pack(fill="both", expand=True, padx=10, pady=4)
-            self._tab_game(); self._tab_models(); self._tab_remote()
-            self._tab_params(); self._tab_backup()
+            self.bind_all("<Button-4>", self._wheel_all)
+            self.bind_all("<Button-5>", self._wheel_all)
+            self._tab_home()
+            self._tab_basic()
+            self._tab_advanced()
+            self._tab_remote()
+            self._tab_characters()
+            self._tab_backup()
 
             bottom = ttk.Frame(self, padding=(10, 2, 10, 8))
             bottom.pack(fill="both", expand=False)
-            self.logbox = tk.Text(bottom, height=9, wrap="word", state="disabled",
+            self.logbox = tk.Text(bottom, height=8, wrap="word", state="disabled",
                                   background="#111", foreground="#cfc")
             self.logbox.pack(fill="both", expand=True)
-            bar = ttk.Frame(self); bar.pack(fill="x", padx=10, pady=(0, 6))
-            self.status_var = tk.StringVar(value="ready")
-            ttk.Label(bar, textvariable=self.status_var).pack(side="left")
+            add_tip(self.logbox, T("Everything this tool does, in order. Also written to a "
+                                   "file you can read later."))
+            bar = ttk.Frame(self)
+            bar.pack(fill="x", padx=10, pady=(0, 6))
+            self.status_var = tk.StringVar(value=T("ready"))
+            sl = ttk.Label(bar, textvariable=self.status_var)
+            sl.pack(side="left")
+            add_tip(sl, T("What is happening right now."))
             self.progress = ttk.Progressbar(bar, length=140, mode="determinate")
             self.progress.pack(side="right")
+            add_tip(self.progress, T("Spins while the game files are read or written."))
 
-        # ---------- tab: game ---------- #
-        def _tab_game(self):
-            f = ttk.Frame(self.nb, padding=10)
-            self.nb.add(f, text=" Game ")
-            self.info_var = tk.StringVar(value="not scanned yet")
-            ttk.Label(f, textvariable=self.info_var, justify="left").pack(anchor="w")
-            box = ttk.LabelFrame(f, text="How it works", padding=8)
-            box.pack(fill="both", expand=True, pady=8)
-            tk.Label(box, justify="left", anchor="w", text=(
-                "Vaudeville's dialogue AI is undreamai/LLMUnity v3.0.0 + LlamaLib v2.0.0 (a\n"
-                "llama.cpp fork). Every sampling parameter and the local/remote switch is a\n"
-                "serialized field inside the shipped Unity assets:\n\n"
-                "   sharedassets3.assets            1 × LLMUnity.LLM       (model, context, GPU, server)\n"
-                "   level4…level13, sharedassets18  26 × LLMUnity.LLMAgent  (per-character sampling)\n\n"
-                "This tool finds those blobs with a structural signature, validates every field,\n"
-                "and rewrites them in place at their absolute file offset (bool/int/float are\n"
-                "always 4 bytes; strings only when ceil4(len) is unchanged). Hash-verified backups\n"
-                "are written outside the game folder before anything is touched.\n\n"
-                "Remote endpoints: the game speaks the llama.cpp-server protocol (/health,\n"
-                "/apply-template, /completion, /tokenize, /detokenize, /embeddings) — not OpenAI's\n"
-                "/v1/chat/completions. The built-in shim translates, so vLLM / Ollama / LM Studio /\n"
-                "OpenAI / TGI all work. A real llama.cpp server needs no shim at all."),
-                wraplength=980).pack(anchor="w")
+        # ---------- tab plumbing ---------- #
+        def _sync_tabs(self, select: str = ""):
+            """Show Home, the chosen setup's tab, Characters and Backup — nothing else."""
+            order = ["home"]
+            if self.chosen_mode in TAB_OF_MODE:
+                order += [TAB_OF_MODE[self.chosen_mode], "characters", "backup"]
+            for name in list(self.nb.tabs()):
+                try:
+                    self.nb.forget(name)
+                except Exception:                            # noqa: BLE001
+                    pass
+            for key in order:
+                frame = self.tab_frames.get(key)
+                if frame is None:
+                    continue
+                try:
+                    self.nb.add(frame, text=tab_title(key))
+                except Exception:                            # noqa: BLE001
+                    pass
+            target = self.tab_frames.get(select or "home")
+            if target is not None:
+                try:
+                    self.nb.select(target)
+                except Exception:                            # noqa: BLE001
+                    pass
 
-        # ---------- tab: models ---------- #
-        def _tab_models(self):
-            f = ttk.Frame(self.nb, padding=10)
-            self.nb.add(f, text=" Models ")
-            ttk.Label(f, text=("The build hard-codes two GGUF filenames inside StreamingAssets. "
-                               "Point each one at any GGUF you like (symlink swap, the shipped file "
-                               "is preserved as gguf/ORIGINAL_…).")).pack(anchor="w")
-            self.model_rows = {}
-            for i, slot in enumerate(model_slots()):
-                box = ttk.LabelFrame(f, text=f"{slot.label}   ({slot.name})", padding=8)
-                box.pack(fill="x", pady=6)
-                cur = ttk.Label(box, text="current: …", anchor="w")
-                cur.pack(fill="x")
-                row = ttk.Frame(box); row.pack(fill="x", pady=4)
-                combo = ttk.Combobox(row, width=70)
-                combo.pack(side="left", fill="x", expand=True)
-                bb = ttk.Button(row, text="Browse…",
-                                command=lambda s=slot, c=combo: self.pick_model(c))
-                bb.pack(side="left", padx=4)
-                ba = ttk.Button(row, text="Apply", command=lambda s=slot, c=combo, lbl=cur: self.apply_model(s, c, lbl))
-                ba.pack(side="left")
+        def _startup_tab(self, args):
+            want = normalize_tab(getattr(args, "tab", None))
+            mode = normalize_mode(self.cfg.get("mode", MODE_OFF), MODE_OFF)
+            if want in MODE_OF_TAB:
+                mode = MODE_OF_TAB[want]
+                self.chosen_mode = mode
+            elif want in ("characters", "backup") or self.cfg.get("mode_confirmed"):
+                self.chosen_mode = mode
+            try:
+                self.mode_pick_var.set(mode)
+            except Exception:                                # noqa: BLE001
+                pass
+            self._refresh_cards()
+            self._sync_tabs(select=want or "home")
+
+        def _build_footer(self, parent):
+            bar = tk.Frame(parent, background=self.bg)
+            bar.pack(fill="x", pady=(10, 0))
+            credit = tk.Label(bar, text=CREDIT, background=self.bg, foreground=self.muted,
+                              justify="left", anchor="w", wraplength=820)
+            credit.pack(side="left", fill="x", expand=True)
+            add_tip(credit, T("Who makes this tool, and what it is allowed to touch."))
+            link = tk.Label(bar, text=GITHUB_URL, background=self.bg, foreground=self.link_fg,
+                            cursor="hand2", font=("TkDefaultFont", 9, "underline"))
+            link.pack(side="right", padx=(8, 0))
+            link.bind("<Button-1>", lambda _e: self.open_project_page())
+            add_tip(link, T("Open the project page in your web browser: source code, "
+                            "downloads, release notes and the issue tracker."))
+
+        def open_project_page(self):
+            try:
+                webbrowser.open(GITHUB_URL)
+                self.log(T("Opened the project page: ") + GITHUB_URL)
+            except Exception as exc:                         # noqa: BLE001
+                self.log(T("Could not open a web browser: ") + str(exc))
+                messagebox.showinfo(APP_NAME, T("Project page: ") + GITHUB_URL)
+
+        # ---------- scrollable tab content ---------- #
+        def _scrolled(self, parent):
+            """Canvas + scrollbar wrapper so a tall tab never clips its plan box."""
+            canv = tk.Canvas(parent, highlightthickness=0)
+            sb = ttk.Scrollbar(parent, orient="vertical", command=canv.yview)
+            inner = ttk.Frame(canv, padding=12)
+            inner.bind("<Configure>",
+                       lambda _e: canv.configure(scrollregion=canv.bbox("all")))
+            win = canv.create_window((0, 0), window=inner, anchor="nw")
+            canv.configure(yscrollcommand=sb.set)
+            canv.pack(side="left", fill="both", expand=True)
+            sb.pack(side="right", fill="y")
+            canv.bind("<Configure>",
+                      lambda e, w=win: canv.itemconfigure(w, width=e.width))
+            inner._vaudville_canvas = canv
+            return inner
+
+        def _wheel_all(self, event):
+            w = event.widget
+            while w is not None and not isinstance(w, tk.Toplevel):
+                canv = getattr(w, "_vaudville_canvas", None)
+                if canv is not None:
+                    try:
+                        canv.yview_scroll(-1 if event.num == 4 else 1, "units")
+                    except Exception:                            # noqa: BLE001
+                        pass
+                    return "break"
+                w = getattr(w, "master", None)
+            return None
+
+        # ---------- tab: home ---------- #
+        def _tab_home(self):
+            f = ttk.Frame(self.nb)
+            self.tab_frames["home"] = f
+            c = self._scrolled(f)
+            head = ttk.Label(c, text=T("How should Vaudeville talk to its AI?"),
+                             font=("TkDefaultFont", 15, "bold"))
+            head.pack(anchor="w")
+            add_tip(head, T("Three setups, pick one. The rest of this window stays hidden "
+                            "until you choose, so you only ever see settings that apply to "
+                            "your setup."))
+            sub = ttk.Label(c, foreground=self.muted, wraplength=980, justify="left",
+                            text=T("Choose a card below and press Continue. You can come back "
+                                   "here and switch at any time — a verified backup of the game "
+                                   "files is made before anything is written."))
+            sub.pack(anchor="w", pady=(2, 10))
+            add_tip(sub, T("Switching setups rewrites the same few values in the game files; "
+                           "it never deletes anything."))
+
+            box = ttk.LabelFrame(c, text=T("Your game"), padding=10)
+            box.pack(fill="x")
+            self.info_var = tk.StringVar(value=T("Looking for the game…"))
+            info = ttk.Label(box, textvariable=self.info_var, justify="left", wraplength=980)
+            info.pack(anchor="w", fill="x")
+            self.info_tip = add_tip(info, T("Where the game was found, which build it is, and "
+                                            "how many character and engine settings this tool "
+                                            "can see."))
+
+            cards = ttk.Frame(c)
+            cards.pack(fill="both", expand=True, pady=(10, 2))
+            self.mode_pick_var = tk.StringVar(
+                value=normalize_mode(self.cfg.get("mode", MODE_OFF), MODE_OFF))
+            for key in MODE_ORDER:
+                self._build_mode_card(cards, key)
+
+            row = ttk.Frame(c)
+            row.pack(fill="x", pady=(4, 0))
+            self.continue_btn = ttk.Button(row, text=T("Continue"), command=self._continue_home)
+            self.continue_btn.pack(side="left")
+            self.action_buttons.append(self.continue_btn)
+            add_tip(self.continue_btn, T("Open the settings for the setup you picked."))
+            self.home_hint = ttk.Label(row, text="", foreground=self.muted, wraplength=760,
+                                       justify="left")
+            self.home_hint.pack(side="left", padx=12)
+            self._refresh_cards()
+            self._build_footer(c)
+
+        def _build_mode_card(self, parent, key: str):
+            card = MODE_CARDS[key]
+            title = str(card.get("title") or mode_label(key))
+            blurb = str(card.get("blurb") or T(MODE_TIPS[key]))
+            diff = T("Difficulty: ") + str(card.get("difficulty") or "—")
+            rest = T("Restrictions: ") + str(card.get("restrictions") or "—")
+            outer = tk.Frame(parent, background=self.card_bg, highlightthickness=2,
+                             highlightbackground=self.card_edge, bd=0, padx=12, pady=9,
+                             cursor="hand2")
+            outer.pack(fill="x", pady=5)
+            rb = tk.Radiobutton(outer, text=title, value=key, variable=self.mode_pick_var,
+                                background=self.card_bg, foreground=self.fg,
+                                activebackground=self.card_bg, activeforeground=self.fg,
+                                selectcolor=self.card_bg, anchor="w", cursor="hand2",
+                                font=("TkDefaultFont", 11, "bold"),
+                                command=lambda k=key: self._card_picked(k))
+            rb.pack(anchor="w")
+            body = tk.Label(outer, text=blurb, justify="left", anchor="w", wraplength=940,
+                            background=self.card_bg, foreground=self.fg, cursor="hand2")
+            body.pack(anchor="w", pady=(2, 4))
+            d = tk.Label(outer, text=diff, justify="left", anchor="w", wraplength=940,
+                         background=self.card_bg, foreground=self.muted, cursor="hand2")
+            d.pack(anchor="w")
+            r = tk.Label(outer, text=rest, justify="left", anchor="w", wraplength=940,
+                         background=self.card_bg, foreground=self.muted, cursor="hand2")
+            r.pack(anchor="w", pady=(2, 0))
+            self.mode_cards[key] = [outer, rb, body, d, r]
+            tip = "\n".join(x for x in (title, blurb, diff, rest,
+                                        T("Double-click to open this setup right away.")) if x)
+            for w in (outer, rb, body, d, r):
+                w.bind("<Button-1>", lambda _e, k=key: self._card_picked(k), add="+")
+                w.bind("<Double-Button-1>", lambda _e, k=key: self._card_go(k), add="+")
+                add_tip(w, tip)
+
+        def _refresh_cards(self):
+            picked = normalize_mode(self.mode_pick_var.get(), "")
+            for key, widgets in self.mode_cards.items():
+                on = key == picked
+                bg = self.card_bg_on if on else self.card_bg
+                edge = self.card_edge_on if on else self.card_edge
+                widgets[0].configure(background=bg, highlightbackground=edge)
+                for w in widgets[1:]:
+                    try:
+                        w.configure(background=bg)
+                        if isinstance(w, tk.Radiobutton):
+                            w.configure(activebackground=bg,
+                                        selectcolor=self.card_bg_on if on else self.card_bg)
+                    except Exception:                        # noqa: BLE001
+                        pass
+            try:
+                self.continue_btn.configure(state="normal" if picked else "disabled")
+            except Exception:                                # noqa: BLE001
+                pass
+            self.home_hint.configure(
+                text=(T("Selected: ") + mode_label(picked)) if picked
+                else T("No setup chosen yet — pick a card above."))
+
+        def _card_picked(self, key: str):
+            self.mode_pick_var.set(key)
+            self._refresh_cards()
+            self.status(T("Selected: ") + mode_label(key))
+
+        def _card_go(self, key: str):
+            self.mode_pick_var.set(key)
+            self._refresh_cards()
+            self._continue_home()
+
+        def _continue_home(self):
+            key = normalize_mode(self.mode_pick_var.get(), "")
+            if not key:
+                messagebox.showinfo(APP_NAME, T("Pick one of the three setup cards first."))
+                return
+            self.chosen_mode = key
+            self.cfg["mode"] = key
+            self.cfg["mode_confirmed"] = True
+            self._sync_tabs(select=TAB_OF_MODE[key])
+            self.log(T("Setup chosen: ") + mode_label(key))
+            self.status(T("Showing the settings for ") + mode_label(key))
+            self._save_cfg()
+            self.refresh_models()
+            self._update_gpu_line()
+
+        def _save_cfg(self):
+            try:
+                self.cfg = self._collect_config()
+                save_config(self.cfg)
+            except Exception as exc:                         # noqa: BLE001
+                self.log(f"config save failed: {exc}")
+
+        # ---------- shared: mode header / apply row ---------- #
+        def _mode_header(self, parent, key: str, tagline: str = ""):
+            card = MODE_CARDS[key]
+            title = str(card.get("title") or mode_label(key))
+            blurb = str(card.get("blurb") or T(MODE_TIPS[key]))
+            head = ttk.Label(parent, text=title, font=("TkDefaultFont", 14, "bold"))
+            head.pack(anchor="w")
+            add_tip(head, T(tagline) or blurb)
+            if tagline:
+                sub = ttk.Label(parent, text=T(tagline), foreground=self.muted,
+                                wraplength=960, justify="left")
+                sub.pack(anchor="w", pady=(0, 6))
+                add_tip(sub, blurb)
+            box = ttk.LabelFrame(parent, text=T("What this setup does"), padding=8)
+            box.pack(fill="x", pady=(0, 6))
+            body = ttk.Label(box, text=blurb, wraplength=950, justify="left")
+            body.pack(anchor="w")
+            add_tip(body, str(card.get("restrictions") or blurb))
+            for label, value in ((T("Difficulty: "), card.get("difficulty")),
+                                 (T("Restrictions: "), card.get("restrictions"))):
+                if value:
+                    line = ttk.Label(box, text=label + str(value), foreground=self.muted,
+                                     wraplength=950, justify="left")
+                    line.pack(anchor="w", pady=(3, 0))
+                    add_tip(line, blurb)
+            return box
+
+        def _build_apply_row(self, parent, tab_key: str, extra: str = ""):
+            act = ttk.Frame(parent)
+            act.pack(fill="x", pady=(8, 4))
+            b = ttk.Button(act, text=T("Preview changes"), command=self.preview)
+            b.pack(side="left")
+            self.action_buttons.append(b)
+            add_tip(b, T("Work out exactly what would change and show it here. No file is touched."))
+            b = ttk.Button(act, text=T("Apply to game files"), command=self.apply_changes)
+            b.pack(side="left", padx=6)
+            self.action_buttons.append(b)
+            add_tip(b, T("Write the changes into the game files. A verified backup is made "
+                         "first and the game must be closed."))
+            if extra:
+                note = ttk.Label(act, text=T(extra), foreground=self.muted, wraplength=620,
+                                 justify="left")
+                note.pack(side="left", padx=10)
+                add_tip(note, T("Backups are listed on the Backup / restore tab."))
+            box = tk.Text(parent, height=8, wrap="word", state="disabled")
+            box.pack(fill="both", expand=True)
+            self.plan_boxes[tab_key] = box
+            add_tip(box, T("The plan: what will change, where, and anything to watch out for. "
+                           "File names and offsets are shown for people who want the detail."))
+
+        # ---------- shared: model panel ---------- #
+        def _build_model_panel(self, parent, restrict: bool) -> dict:
+            title = (T("Models — %s family only" % LLAMA3_8B_FAMILY) if restrict
+                     else T("Models — any model file"))
+            box = ttk.LabelFrame(parent, text=title, padding=8)
+            box.pack(fill="x", pady=6)
+            fallback = (
+                T("This setup only accepts model files from the %s family, because that is what "
+                  "the shipped game data expects. Anything else is refused here — use %s or %s "
+                  "for other models.") % (LLAMA3_8B_FAMILY, mode_label(MODE_DIRECT),
+                                          mode_label(MODE_SHIM))
+                if restrict else
+                T("Any model file works here. The game always looks for the same two file names, "
+                  "so this tool points each of them at the model you choose and keeps the "
+                  "original file safe beside it."))
+            intro = help_line(MODEL_HELP,
+                              ("basic restriction", "basic", "intro") if restrict
+                              else ("advanced restriction", "advanced", "intro"), fallback)
+            il = ttk.Label(box, text=intro, wraplength=950, justify="left")
+            il.pack(anchor="w")
+            add_tip(il, intro)
+            panel = {"restrict": restrict, "rows": {}, "last": {}, "cur_tips": {},
+                     "warn": None, "box": box}
+            for slot in model_slots():
+                rowf = ttk.Frame(box)
+                rowf.pack(fill="x", pady=(6, 0))
+                name = ttk.Label(rowf, text=slot.label + ":", width=27, anchor="w")
+                name.pack(side="left")
+                add_tip(name, help_line(MODEL_HELP,
+                                        (slot.label, slot.name,
+                                         "primary" if slot.name == PRIMARY_MODEL_NAME else "deck",
+                                         "slot"),
+                                        slot.label + " — " +
+                                        T("the file name the game always looks for")))
+                combo = ttk.Combobox(rowf, width=58)
+                combo.pack(side="left", fill="x", expand=True, padx=4)
+                add_tip(combo, T("Pick a model from your collection, or Browse… to any model "
+                                 "file on this computer.") +
+                        ("\n" + T("This setup accepts the %s family only.") % LLAMA3_8B_FAMILY
+                         if restrict else ""))
+                bb = ttk.Button(rowf, text=T("Browse…"),
+                                command=lambda p=panel, c=combo, s=slot: self.pick_model(p, c, s))
+                bb.pack(side="left", padx=2)
+                add_tip(bb, T("Choose a model file from anywhere on this computer."))
+                ba = ttk.Button(rowf, text=T("Use this model"),
+                                command=lambda p=panel, s=slot: self.apply_model(p, s))
+                ba.pack(side="left", padx=2)
                 self.action_buttons.append(ba)
-                self.model_rows[slot.name] = (cur, combo)
-            lib = ttk.Frame(f); lib.pack(fill="x", pady=6)
-            self.lib_var = tk.StringVar(value="")
-            ttk.Label(lib, textvariable=self.lib_var).pack(side="left")
-            b = ttk.Button(lib, text="Open library folder", command=self.open_library); b.pack(side="right")
-            b = ttk.Button(lib, text="Refresh", command=self.refresh_models); b.pack(side="right", padx=4)
-            ttk.Label(f, foreground="#555", text=(
-                "Tip: on Steam Deck the game switches to the fallback model automatically "
-                "(OffWorldInit.Awake). GPU offload is not here — it comes from the in-game "
-                "Options slider / the 'GpuLoad' preference, and the Parameters tab can set it too.")).pack(anchor="w", pady=(8, 0))
+                add_tip(ba, T("Point the game at the selected model. The original file is kept "
+                              "and nothing is overwritten."))
+                cur = ttk.Label(box, text=T("in use now: …"), foreground=self.muted,
+                                anchor="w", wraplength=950, justify="left")
+                cur.pack(anchor="w", fill="x")
+                panel["rows"][slot.name] = (cur, combo)
+                panel["last"][slot.name] = ""
+                panel["cur_tips"][slot.name] = add_tip(cur, "")
+                combo.bind("<<ComboboxSelected>>",
+                           lambda _e, p=panel, c=combo, s=slot: self._model_chosen(p, c, s, True))
+                combo.bind("<FocusOut>",
+                           lambda _e, p=panel, c=combo, s=slot: self._model_chosen(p, c, s, False))
+            panel["warn"] = ttk.Label(box, text="", foreground=self.warn_fg, wraplength=950,
+                                      justify="left")
+            panel["warn"].pack(anchor="w", pady=(6, 0))
+            foot = ttk.Frame(box)
+            foot.pack(fill="x", pady=(6, 0))
+            panel["lib_var"] = tk.StringVar(value="")
+            liblbl = ttk.Label(foot, textvariable=panel["lib_var"], foreground=self.muted,
+                               wraplength=640, justify="left")
+            liblbl.pack(side="left", fill="x", expand=True)
+            add_tip(liblbl, T("Your model collection folder. Drop GGUF files in here and press "
+                              "Refresh list to see them."))
+            b1 = ttk.Button(foot, text=T("Open models folder"), command=self.open_library)
+            b1.pack(side="right")
+            add_tip(b1, T("Open the folder where your model files live."))
+            b2 = ttk.Button(foot, text=T("Refresh list"), command=self.refresh_models)
+            b2.pack(side="right", padx=4)
+            add_tip(b2, T("Re-read the model folder and what the game is using right now."))
+            self.model_panels.append(panel)
+            return panel
+        # ---------- tab: Local Mode - Basic ---------- #
+        def _tab_basic(self):
+            f = ttk.Frame(self.nb)
+            self.tab_frames["basic"] = f
+            c = self._scrolled(f)
+            self._mode_header(c, MODE_OFF,
+                              T("The unmodified game, running a model file you choose."))
+            self._build_model_panel(c, restrict=True)
+            gpu = ttk.LabelFrame(c, text=T("Graphics-card offload"), padding=8)
+            gpu.pack(fill="x", pady=6)
+            text = T("How much of the model runs on your graphics card is decided by the game's "
+                     "own Options screen (the AI/GPU slider), and that slider always wins over "
+                     "anything set here. Change it in the game, then start a new game or restart "
+                     "the game for it to take effect.")
+            g = ttk.Label(gpu, text=text, wraplength=950, justify="left")
+            g.pack(anchor="w")
+            add_tip(g, help_line(MODEL_HELP, ("gpu", "numGPULayers", "offload"), text))
+            self.gpu_current = ttk.Label(gpu, text="", foreground=self.muted, wraplength=950,
+                                         justify="left")
+            self.gpu_current.pack(anchor="w", pady=(4, 0))
+            self.gpu_tip = add_tip(self.gpu_current, "")
+            self._build_apply_row(c, "basic",
+                                  T("Changes are written to the game files with a backup first."))
 
-        # ---------- tab: remote ---------- #
+        def _update_gpu_line(self):
+            try:
+                if self.scan is not None and self.scan.llm:
+                    v = self.scan.llm[0].values.get("numGPULayers")
+                    self.gpu_current.configure(text=T("Game files currently say: ") +
+                                               f"numGPULayers={v}" +
+                                               T(" (the in-game Options slider overrides this "
+                                                 "every time the game starts)."))
+                    if self.gpu_tip:
+                        self.gpu_tip.set_text(T("Under the hood: the numGPULayers value in the "
+                                                "game's AI engine settings. Local Mode - "
+                                                "Advanced can also set it."))
+                else:
+                    self.gpu_current.configure(
+                        text=T("Game files not read yet — press Re-scan to see the current value."))
+            except Exception:                                # noqa: BLE001
+                pass
+
+        # ---------- tab: Local Mode - Advanced ---------- #
+        def _tab_advanced(self):
+            f = ttk.Frame(self.nb)
+            self.tab_frames["advanced"] = f
+            c = self._scrolled(f)
+            self._mode_header(c, MODE_DIRECT,
+                              T("The game connects straight to an AI server you run yourself."))
+            self._build_model_panel(c, restrict=False)
+
+            srv = ttk.LabelFrame(c, text=T("Your server"), padding=8)
+            srv.pack(fill="x", pady=6)
+            mode = normalize_mode(self.cfg.get("mode", MODE_OFF), MODE_OFF)
+            row = ttk.Frame(srv)
+            row.pack(fill="x")
+            hl = ttk.Label(row, text=T("Address:"))
+            hl.pack(side="left")
+            add_tip(hl, help_line(SHIM_HELP, ("direct_host", "host"),
+                                  T("The computer your server runs on, for example 127.0.0.1 "
+                                    "for this machine or a name on your home network.")))
+            self.direct_host_var = tk.StringVar(value=str(
+                self.cfg.get("direct_host")
+                or (self.cfg.get("backend_url", "") if mode == MODE_DIRECT else "")))
+            he = ttk.Entry(row, textvariable=self.direct_host_var, width=26)
+            he.pack(side="left", padx=4)
+            add_tip(he, T("No https:// and no web path such as /v1 — this setup hands the "
+                          "address straight to the game's own network code.") +
+                    "\n" + T("Remote Mode accepts any address."))
+            he.bind("<KeyRelease>", lambda _e: self._check_host_fit())
+            he.bind("<FocusOut>", lambda _e: self._check_host_fit())
+            pl = ttk.Label(row, text=T("Port:"))
+            pl.pack(side="left", padx=(10, 0))
+            add_tip(pl, help_line(SHIM_HELP, ("direct_port", "port"),
+                                  T("The port your server listens on. llama-server uses 8080 by "
+                                    "default. Leave empty to use the port in the address.")))
+            self.direct_port_var = tk.StringVar(value=str(self.cfg.get("direct_port") or ""))
+            pe = ttk.Entry(row, textvariable=self.direct_port_var, width=7)
+            pe.pack(side="left", padx=4)
+            add_tip(pe, T("A whole number between 1 and 65535."))
+            self.host_fit_var = tk.StringVar(value="")
+            fit = ttk.Label(row, textvariable=self.host_fit_var, foreground=self.muted,
+                            wraplength=520, justify="left")
+            fit.pack(side="left", padx=8)
+            self.host_fit_tip = add_tip(fit, T("Checked live against the space the game "
+                                               "reserves for the address."))
+            rule = ttk.Label(srv, foreground=self.muted, wraplength=950, justify="left", text=T(
+                "Why the odd length rule: the game keeps this address in a fixed-size space that "
+                "currently holds “localhost”, so the replacement has to be 9 to 12 characters "
+                "long. 127.0.0.1 and myserver.lan both fit; longer names, https:// and paths "
+                "like /v1 do not. Use Remote Mode when you need those."))
+            rule.pack(anchor="w", pady=(6, 0))
+            add_tip(rule, T("Under the hood: strings can only be rewritten in place when their "
+                            "rounded-up byte length stays the same."))
+            proto = ttk.Label(srv, foreground=self.muted, wraplength=950, justify="left", text=T(
+                "The server must speak the llama.cpp protocol (/health, /apply-template, "
+                "/completion, /tokenize). llama-server does. OpenAI-style services such as "
+                "Ollama, LM Studio, vLLM or OpenAI do not — use Remote Mode for those."))
+            proto.pack(anchor="w", pady=(4, 0))
+            add_tip(proto, T("Remote Mode runs a small translator on your computer, so "
+                             "OpenAI-style services work there."))
+
+            eng = ttk.LabelFrame(c, text=T("AI engine settings"), padding=8)
+            eng.pack(fill="both", expand=True, pady=6)
+            intro = ttk.Label(eng, wraplength=950, justify="left", text=T(
+                "These are read by the game's own AI engine when it loads the model. Empty boxes "
+                "are left exactly as they are."))
+            intro.pack(anchor="w", pady=(0, 4))
+            add_tip(intro, help_line(MODEL_HELP, ("engine", "intro"),
+                                     T("Only Local Mode - Basic and Local Mode - Advanced use "
+                                       "these; a remote server has its own settings.")))
+            gridf = ttk.Frame(eng)
+            gridf.pack(fill="x")
+            self._field_grid(gridf, ENGINE_FIELDS, self.llm_vars, "LLM", columns=2)
+            self._build_apply_row(c, "advanced",
+                                  T("Changes are written to the game files with a backup first."))
+            self._check_host_fit()
+
+        def _check_host_fit(self):
+            wanted = self.direct_host_var.get().strip()
+            if not wanted:
+                self.host_fit_var.set(T("Address empty — the game keeps using its own model."))
+                return
+            if "://" in wanted or "/" in wanted:
+                self.host_fit_var.set(T("Use a plain address such as 127.0.0.1 — no https:// "
+                                        "and no /v1 path here."))
+                return
+            current = "localhost"
+            if self.scan is not None and self.scan.agents:
+                current = str(self.scan.agents[0].values.get("host") or "localhost")
+            ok, why = host_fits(current, wanted)
+            if ok:
+                self.host_fit_var.set(T("This address fits ✓ (9–12 characters)."))
+            else:
+                short = T("Too long for the space the game reserves — 9 to 12 characters only.")
+                self.host_fit_var.set(short)
+                if self.host_fit_tip:
+                    self.host_fit_tip.set_text(T(why))
+
+        # ---------- tab: Remote Mode ---------- #
         def _tab_remote(self):
-            f = ttk.Frame(self.nb, padding=10)
-            self.nb.add(f, text=" Remote endpoint ")
-            self.mode_var = tk.StringVar(value=normalize_mode(self.cfg.get("mode", MODE_SHIM)))
-            modes = ttk.LabelFrame(f, text="Mode", padding=8)
-            modes.pack(fill="x")
-            for val in MODE_ORDER:
-                r = ttk.Radiobutton(modes, text=MODE_LABELS[val], value=val,
-                                    variable=self.mode_var, command=self._mode_changed)
-                r.pack(anchor="w")
-                ttk.Label(modes, text="      " + MODE_TIPS[val], foreground="#666").pack(anchor="w")
-
-            be = ttk.LabelFrame(f, text="Backend (what the shim forwards to)", padding=8)
+            f = ttk.Frame(self.nb)
+            self.tab_frames["remote"] = f
+            c = self._scrolled(f)
+            self._mode_header(c, MODE_SHIM,
+                              T("A small translator on your computer connects the game to any "
+                                "AI service."))
+            cfg = self.cfg
+            be = ttk.LabelFrame(c, text=T("The service you want to use"), padding=8)
             be.pack(fill="x", pady=6)
-            grid = ttk.Frame(be); grid.pack(fill="x")
-            self.backend_var = tk.StringVar(value=self.cfg.get("backend_url", ""))
-            self.bmodel_var = tk.StringVar(value=self.cfg.get("backend_model", ""))
-            self.apikey_var = tk.StringVar(value=self.cfg.get("api_key", ""))
-            self.savekey_var = tk.BooleanVar(value=bool(self.cfg.get("save_api_key")))
-            for i, (label, var, width, show) in enumerate((
-                    ("BaseURL", self.backend_var, 46, None),
-                    ("Model name", self.bmodel_var, 26, None),
-                    ("API key", self.apikey_var, 30, "*"))):
-                ttk.Label(grid, text=label + ":").grid(row=i, column=0, sticky="w", pady=2)
+            grid = ttk.Frame(be)
+            grid.pack(fill="x")
+            self.backend_var = tk.StringVar(value=str(
+                cfg.get("shim_backend_url") or cfg.get("backend_url", "")))
+            self.bmodel_var = tk.StringVar(value=cfg.get("backend_model", ""))
+            self.apikey_var = tk.StringVar(value=cfg.get("api_key", ""))
+            self.savekey_var = tk.BooleanVar(value=bool(cfg.get("save_api_key")))
+            rows = (
+                ("BaseURL:", self.backend_var, 46, None,
+                 ("BaseURL", "backend_url", "base_url"),
+                 T("Where your AI service lives, for example http://127.0.0.1:11434/v1 "
+                   "(Ollama) or https://api.openai.com/v1.")),
+                ("Model name:", self.bmodel_var, 26, None,
+                 ("Model name", "backend_model", "model_name"),
+                 T("The name the service expects, for example llama3.1:8b or "
+                   "meta-llama/Llama-3.1-8B-Instruct.")),
+                ("API key:", self.apikey_var, 30, "*",
+                 ("API key", "api_key", "save key"),
+                 T("Only needed by services that ask for one. It is handed to the translator "
+                   "through the environment, never on a command line, and only saved if you "
+                   "tick “Save API key”.")),
+            )
+            for i, (label, var, width, show, keys, fallback) in enumerate(rows):
+                lab = ttk.Label(grid, text=T(label))
+                lab.grid(row=i, column=0, sticky="w", pady=2)
+                add_tip(lab, help_line(SHIM_HELP, keys, fallback))
                 e = ttk.Entry(grid, textvariable=var, width=width, show=show)
                 e.grid(row=i, column=1, sticky="we", padx=6, pady=2)
-                if label == "API key":
+                add_tip(e, help_line(SHIM_HELP, keys, fallback))
+                if show == "*":
                     e._is_key_entry = True
                     self.key_entry = e
             grid.columnconfigure(1, weight=1)
-            opts = ttk.Frame(be); opts.pack(fill="x", pady=(6, 0))
-            ttk.Checkbutton(opts, text="Save API key in config (chmod 600)",
-                            variable=self.savekey_var).pack(side="left")
+            opts = ttk.Frame(be)
+            opts.pack(fill="x", pady=(6, 0))
+            cb = ttk.Checkbutton(opts, text=T("Save API key in my config file"),
+                                 variable=self.savekey_var)
+            cb.pack(side="left")
+            add_tip(cb, help_line(SHIM_HELP, ("save key", "save_api_key", "save_key"),
+                                  T("Stores the key in a file only your user can read "
+                                    "(permissions 600). Leave unticked to keep it in memory "
+                                    "for this session only.")))
             self.showkey_var = tk.BooleanVar(value=False)
-            ttk.Checkbutton(opts, text="Show key", variable=self.showkey_var,
-                            command=self._toggle_key).pack(side="left", padx=8)
-            b = ttk.Button(opts, text="Load from Bitwarden…", command=self.load_bitwarden)
+            cb2 = ttk.Checkbutton(opts, text=T("Show key"), variable=self.showkey_var,
+                                  command=self._toggle_key)
+            cb2.pack(side="left", padx=8)
+            add_tip(cb2, T("Reveal the key while you type it. It is never written to the log."))
+            b = ttk.Button(opts, text=T("Load from Bitwarden…"), command=self.load_bitwarden)
             b.pack(side="left", padx=4)
-            ttk.Label(be, foreground="#555", text=(
-                "Examples —  vLLM: http://127.0.0.1:8000/v1   Ollama: http://127.0.0.1:11434/v1\n"
-                "                     LM Studio: http://127.0.0.1:1234/v1   OpenAI: https://api.openai.com/v1\n"
-                "The key is passed to the shim through the environment, never on a command line.")).pack(anchor="w", pady=(6, 0))
+            add_tip(b, T("Pick a saved login from an unlocked Bitwarden vault. Needs the "
+                         "official Bitwarden command line (bw)."))
+            ex = ttk.Label(be, foreground=self.muted, wraplength=950, justify="left", text=T(
+                "Examples —  Ollama: http://127.0.0.1:11434/v1    LM Studio: "
+                "http://127.0.0.1:1234/v1    vLLM: http://127.0.0.1:8000/v1    OpenAI: "
+                "https://api.openai.com/v1    OpenRouter: https://openrouter.ai/api/v1"))
+            ex.pack(anchor="w", pady=(6, 0))
+            add_tip(ex, T("Any service that speaks the OpenAI API works here."))
 
-            sh = ttk.LabelFrame(f, text="Built-in shim", padding=8)
+            sh = ttk.LabelFrame(c, text=T("The translator on this computer"), padding=8)
             sh.pack(fill="x", pady=6)
-            row = ttk.Frame(sh); row.pack(fill="x")
-            ttk.Label(row, text="Listen:").pack(side="left")
-            self.listen_var = tk.StringVar(value=self.cfg.get("shim_listen", "127.0.0.1"))
-            ttk.Entry(row, textvariable=self.listen_var, width=15).pack(side="left", padx=4)
-            ttk.Label(row, text="Port:").pack(side="left")
-            self.shimport_var = tk.StringVar(value=str(self.cfg.get("shim_port", 13333)))
-            ttk.Entry(row, textvariable=self.shimport_var, width=7).pack(side="left", padx=4)
-            ttk.Label(row, text="Mode:").pack(side="left", padx=(12, 0))
-            self.shimmode_var = tk.StringVar(value=self.cfg.get("shim_mode", "chat"))
-            ttk.Combobox(row, textvariable=self.shimmode_var, width=6, state="readonly",
-                         values=("chat", "raw")).pack(side="left", padx=4)
-            self.strip_var = tk.BooleanVar(value=bool(self.cfg.get("strip_think", True)))
-            ttk.Checkbutton(row, text="Strip <think> blocks", variable=self.strip_var).pack(side="left", padx=10)
+            row = ttk.Frame(sh)
+            row.pack(fill="x")
+            lab = ttk.Label(row, text=T("Listen:"))
+            lab.pack(side="left")
+            add_tip(lab, help_line(SHIM_HELP, ("listen/port", "listen", "shim_listen"),
+                                   T("Which address the translator answers on. 127.0.0.1 means "
+                                     "only this computer can reach it — leave it unless you have "
+                                     "a reason not to.")))
+            self.listen_var = tk.StringVar(value=cfg.get("shim_listen", "127.0.0.1"))
+            le = ttk.Entry(row, textvariable=self.listen_var, width=15)
+            le.pack(side="left", padx=4)
+            add_tip(le, help_line(SHIM_HELP, ("listen/port", "shim_listen"),
+                                  T("127.0.0.1 keeps it on this computer only.")))
+            lab = ttk.Label(row, text=T("Port:"))
+            lab.pack(side="left", padx=(8, 0))
+            add_tip(lab, help_line(SHIM_HELP, ("listen/port", "shim_port"),
+                                   T("The port the game connects to. Nothing else may already "
+                                     "be using it.")))
+            self.shimport_var = tk.StringVar(value=str(cfg.get("shim_port", 13333)))
+            spe = ttk.Entry(row, textvariable=self.shimport_var, width=7)
+            spe.pack(side="left", padx=4)
+            add_tip(spe, help_line(SHIM_HELP, ("listen/port", "shim_port"),
+                                   T("Default 13333. Apply points the game at this port.")))
+            ml = ttk.Label(row, text=T("Requests:"))
+            ml.pack(side="left", padx=(12, 0))
+            add_tip(ml, help_line(SHIM_HELP, ("chat vs raw", "shim_mode", "chat_raw"),
+                                  T("chat rebuilds a clean conversation for the service; raw "
+                                    "forwards the game's prompt untouched.")))
+            self.shimmode_var = tk.StringVar(value=cfg.get("shim_mode", "chat"))
+            sc = ttk.Combobox(row, textvariable=self.shimmode_var, width=6, state="readonly",
+                              values=("chat", "raw"))
+            sc.pack(side="left", padx=4)
+            add_tip(sc, help_line(SHIM_HELP, ("chat vs raw", "shim_mode", "chat_raw"),
+                                  T("chat = the service sees a normal chat conversation; "
+                                    "raw = it sees exactly what the game generated.")))
+            self.strip_var = tk.BooleanVar(value=bool(cfg.get("strip_think", True)))
+            st = ttk.Checkbutton(row, text=T("Hide “thinking” text"), variable=self.strip_var)
+            st.pack(side="left", padx=10)
+            add_tip(st, help_line(SHIM_HELP, ("strip think", "strip_think"),
+                                  T("Some models narrate their reasoning inside <think> … "
+                                    "</think>. Ticked, that text is removed before it reaches "
+                                    "the game, so it cannot end up spoken aloud.")))
             self.insecure_var = tk.BooleanVar(value=False)
-            ttk.Checkbutton(row, text="Skip TLS verify", variable=self.insecure_var).pack(side="left")
-            row2 = ttk.Frame(sh); row2.pack(fill="x", pady=(6, 0))
-            self.shim_btn = ttk.Button(row2, text="Start shim", command=self.shim_start)
-            self.shim_btn.pack(side="left"); self.action_buttons.append(self.shim_btn)
-            b = ttk.Button(row2, text="Stop shim", command=self.shim_stop); b.pack(side="left", padx=4)
-            b = ttk.Button(row2, text="Test completion", command=self.shim_test); b.pack(side="left", padx=4)
-            self.action_buttons += [b]
-            b = ttk.Button(row2, text="Show shim log", command=self.shim_log); b.pack(side="left", padx=4)
-            self.shim_state = ttk.Label(row2, text="● stopped", foreground="#a33")
+            it = ttk.Checkbutton(row, text=T("Skip TLS certificate check"),
+                                 variable=self.insecure_var)
+            it.pack(side="left")
+            add_tip(it, help_line(SHIM_HELP, ("skip TLS verify", "insecure", "skip_tls"),
+                                  T("Only for a self-signed certificate on your own machine or "
+                                    "network. It disables an important safety check, so leave "
+                                    "it unticked unless you need it.")))
+            row2 = ttk.Frame(sh)
+            row2.pack(fill="x", pady=(6, 0))
+            self.shim_btn = ttk.Button(row2, text=T("Start"), command=self.shim_start)
+            self.shim_btn.pack(side="left")
+            self.action_buttons.append(self.shim_btn)
+            add_tip(self.shim_btn, help_line(SHIM_HELP, ("start/stop/test shim", "start_stop_test"),
+                                            T("Start the translator now. It keeps running after "
+                                              "you close this window; the game connects to it "
+                                              "while you play.")))
+            b = ttk.Button(row2, text=T("Stop"), command=self.shim_stop)
+            b.pack(side="left", padx=4)
+            add_tip(b, T("Stop the translator."))
+            b = ttk.Button(row2, text=T("Test"), command=self.shim_test)
+            b.pack(side="left", padx=4)
+            self.action_buttons.append(b)
+            add_tip(b, T("Send one short test message through the translator to your service "
+                         "and show the answer in the log."))
+            b = ttk.Button(row2, text=T("Log"), command=self.shim_log)
+            b.pack(side="left", padx=4)
+            add_tip(b, T("Open the translator's own log — every request, answer and error."))
+            self.shim_state = ttk.Label(row2, text=T("● stopped"), foreground=self.warn_fg)
             self.shim_state.pack(side="left", padx=12)
+            add_tip(self.shim_state, T("Whether the translator is running and answering."))
 
-            srv = ttk.LabelFrame(f, text="Reverse: expose the game's own model as an HTTP server", padding=8)
+            srv = ttk.LabelFrame(c, text=T("The other direction: let other programs use the "
+                                           "game's model"), padding=8)
             srv.pack(fill="x", pady=6)
-            self.expose_var = tk.BooleanVar(value=bool(self.cfg.get("expose_server")))
-            ttk.Checkbutton(srv, text="Enable (LLM.remote = true) — serves /v1/chat/completions, /completion, /tokenize …",
-                            variable=self.expose_var).pack(anchor="w")
-            row3 = ttk.Frame(srv); row3.pack(fill="x", pady=4)
-            ttk.Label(row3, text="Server port:").pack(side="left")
-            self.serverport_var = tk.StringVar(value=str(self.cfg.get("server_port", 13333)))
-            ttk.Entry(row3, textvariable=self.serverport_var, width=7).pack(side="left", padx=4)
-            ttk.Label(srv, foreground="#555", text=(
-                "One byte in sharedassets3.assets. Do not use the same port as the shim.")).pack(anchor="w")
+            self.expose_var = tk.BooleanVar(value=bool(cfg.get("expose_server")))
+            ec = ttk.Checkbutton(srv, variable=self.expose_var, text=T(
+                "Turn the game into a small AI server other programs on this computer can ask"))
+            ec.pack(anchor="w")
+            add_tip(ec, help_line(SHIM_HELP, ("expose-game-as-server", "expose_server", "reverse"),
+                                  T("Useful for experiments: another program can send prompts to "
+                                    "the model the game has loaded. Do not use the same port as "
+                                    "the translator.")))
+            row3 = ttk.Frame(srv)
+            row3.pack(fill="x", pady=4)
+            sp = ttk.Label(row3, text=T("Port:"))
+            sp.pack(side="left")
+            add_tip(sp, help_line(SHIM_HELP, ("server_port", "expose_port"),
+                                  T("The port the game listens on when the box above is ticked.")))
+            self.serverport_var = tk.StringVar(value=str(cfg.get("server_port", 13333)))
+            spx = ttk.Entry(row3, textvariable=self.serverport_var, width=7)
+            spx.pack(side="left", padx=4)
+            add_tip(spx, T("Pick something free, and not the translator's port."))
+            note = ttk.Label(srv, foreground=self.muted, wraplength=950, justify="left", text=T(
+                "Off by default. The game answers the usual AI-server requests, so tools on this "
+                "computer can borrow the model the game already loaded."))
+            note.pack(anchor="w")
+            add_tip(note, help_line(SHIM_HELP, ("expose-game-as-server", "expose_server"),
+                                    T("One setting in the game's engine block; it is switched "
+                                      "back off when you untick the box and Apply.")))
+            self._build_apply_row(c, "remote",
+                                  T("Apply points the game at the translator; Start runs it."))
+        # ---------- tab: characters ---------- #
+        def _tab_characters(self):
+            f = ttk.Frame(self.nb)
+            self.tab_frames["characters"] = f
+            c = self._scrolled(f)
+            head = ttk.Label(c, text=T("Character personalities"),
+                             font=("TkDefaultFont", 14, "bold"))
+            head.pack(anchor="w")
+            add_tip(head, T("How each character writes its lines: how creative, how repetitive, "
+                            "how long, and whether the same choices are made every time."))
+            intro = (_as_text(getattr(cast, "FRIENDLY_GROUP_INTRO", None))
+                     or T(FRIENDLY_GROUP_INTRO_FALLBACK))
+            il = ttk.Label(c, text=intro, foreground=self.muted, wraplength=980,
+                           justify="left")
+            il.pack(anchor="w", pady=(2, 4))
+            add_tip(il, intro)
+            ghelp = help_line(GROUP_HELP, ("intro", "overview", "groups"), "")
+            if ghelp and ghelp != intro:
+                gl = ttk.Label(c, text=ghelp, foreground=self.muted, wraplength=980,
+                               justify="left")
+                gl.pack(anchor="w", pady=(0, 6))
+                add_tip(gl, ghelp)
 
-            act = ttk.Frame(f); act.pack(fill="x", pady=8)
-            b = ttk.Button(act, text="Preview changes", command=self.preview); b.pack(side="left")
+            pick = ttk.Frame(c)
+            pick.pack(fill="x")
+            gl = ttk.Label(pick, text=T("Which characters?"))
+            gl.pack(side="left")
+            add_tip(gl, T("The groups are the places in town where you meet each character, "
+                          "plus one group for your own Workshop stories. Pick one to change "
+                          "just those characters, or keep “All characters” to change everyone "
+                          "at once."))
+            self.group_choices = group_choices()
+            self.group_var = tk.StringVar(value=group_label(self.current_group))
+            self.group_combo = ttk.Combobox(pick, textvariable=self.group_var, width=34,
+                                            state="readonly",
+                                            values=[lab for _k, lab in self.group_choices])
+            self.group_combo.pack(side="left", padx=6)
+            self.group_combo.bind("<<ComboboxSelected>>", lambda _e: self._group_changed())
+            add_tip(self.group_combo, T("The names and character counts come straight from the "
+                                        "game. Each group's settings live in their own game "
+                                        "files, which is what makes per-group editing "
+                                        "possible."))
+            bl = ttk.Button(pick, text=T("Load current values"), command=self.load_values)
+            bl.pack(side="left", padx=6)
+            self.action_buttons.append(bl)
+            add_tip(bl, T("Read what the first character of this group uses right now and put "
+                          "it in the boxes below."))
+            bc = ttk.Button(pick, text=T("Clear boxes"), command=self.clear_values)
+            bc.pack(side="left")
+            add_tip(bc, T("Empty every box. Empty boxes are left exactly as they are."))
+
+            self.scope_var = tk.StringVar(value="")
+            scope = ttk.Label(c, textvariable=self.scope_var, foreground=self.muted,
+                              wraplength=980, justify="left")
+            scope.pack(anchor="w", fill="x", pady=(8, 2))
+            self.scope_tip = add_tip(scope, "")
+
+            details = ttk.Frame(c)
+            details.pack(fill="x", pady=(2, 0))
+            self._expander(details, T("About these groups"), self._groups_detail_text())
+            self._expander(details, T("Technical evidence (research notes)"),
+                           self._groups_evidence_text(), side="left")
+            self._expander(details, T("Settings this tool cannot change"),
+                           self._locked_detail_text(), side="left")
+
+            box = ttk.LabelFrame(c, text=T("Settings"), padding=8)
+            box.pack(fill="both", expand=True, pady=6)
+            blank = ttk.Label(box, foreground=self.muted, wraplength=950, justify="left",
+                              text=T("Empty box = leave that setting alone. Hover any name for "
+                                     "what it does, its range, and tips. Who a character is and "
+                                     "how they speak comes from the game's own script data and "
+                                     "cannot be edited here — these are the word-choice "
+                                     "settings only."))
+            blank.pack(anchor="w", pady=(0, 6))
+            add_tip(blank, blank.cget("text"))
+            gridf = ttk.Frame(box)
+            gridf.pack(fill="x")
+            self._field_grid(gridf, CHARACTER_FIELDS, self.agent_vars, "AGENT", columns=3)
+
+            btns = ttk.Frame(c)
+            btns.pack(fill="x", pady=(6, 0))
+            b = ttk.Button(btns, text=T("Reset this group to game defaults"),
+                           command=lambda: self.reset_defaults(False))
+            b.pack(side="left")
             self.action_buttons.append(b)
-            b = ttk.Button(act, text="Apply to game files", command=self.apply_changes)
-            b.pack(side="left", padx=6); self.action_buttons.append(b)
-            b = ttk.Button(act, text=f"Reset to {MODE_LABELS[MODE_OFF]}", command=self.set_local)
-            b.pack(side="left"); self.action_buttons.append(b)
-            self.plan_box = tk.Text(f, height=10, wrap="word", state="disabled")
-            self.plan_box.pack(fill="both", expand=True)
+            add_tip(b, T("Fill the boxes with the values the game shipped with, for the group "
+                         "selected above. Nothing is written until you press Apply."))
+            b = ttk.Button(btns, text=T("Reset ALL groups to game defaults"),
+                           command=lambda: self.reset_defaults(True))
+            b.pack(side="left", padx=6)
+            self.action_buttons.append(b)
+            add_tip(b, T("Fill the boxes with the shipped values and apply them to every "
+                         "character. Nothing is written until you press Apply."))
+            self.reset_hint = ttk.Label(btns, foreground=self.muted, wraplength=620,
+                                        justify="left", text="")
+            self.reset_hint.pack(side="left", padx=10)
+            add_tip(self.reset_hint, T("The shipped values are the ones a fresh install has."))
+            self._build_apply_row(c, "characters",
+                                  T("Only the characters in the selected group are changed. "
+                                    "The connection details go to every character, so the "
+                                    "game is never left half-wired."))
+            self._update_group_scope()
 
-        # ---------- tab: parameters ---------- #
-        def _tab_params(self):
-            f = ttk.Frame(self.nb, padding=10)
-            self.nb.add(f, text=" Parameters ")
-            ttk.Label(f, text=("Values apply to all 26 character agents / the single LLM component. "
-                               "Blank = leave unchanged. Loaded from the game on scan.")).pack(anchor="w")
-            cols = ttk.Frame(f); cols.pack(fill="both", expand=True, pady=6)
-            left = ttk.LabelFrame(cols, text="Character agents (LLMUnity.LLMAgent ×26)", padding=6)
-            left.grid(row=0, column=0, sticky="nsew", padx=(0, 6))
-            right = ttk.LabelFrame(cols, text="Local engine (LLMUnity.LLM ×1)", padding=6)
-            right.grid(row=0, column=1, sticky="nsew")
-            cols.columnconfigure(0, weight=1); cols.columnconfigure(1, weight=1)
-            canv = tk.Canvas(left, highlightthickness=0)
-            scroll = ttk.Scrollbar(left, orient="vertical", command=canv.yview)
-            inner = ttk.Frame(canv)
-            inner.bind("<Configure>", lambda e: canv.configure(scrollregion=canv.bbox("all")))
-            canv.create_window((0, 0), window=inner, anchor="nw")
-            canv.configure(yscrollcommand=scroll.set)
-            canv.pack(side="left", fill="both", expand=True)
-            scroll.pack(side="right", fill="y")
-            for i, (name, kind, tip) in enumerate(AGENT_FIELDS_GUI):
-                ttk.Label(inner, text=name).grid(row=i, column=0, sticky="w", pady=1)
+        def _expander(self, parent, label: str, text: str, side: str = "left"):
+            """A small "show/hide the detail" toggle for long background text."""
+            if not text:
+                return None
+            state = {"on": False}
+            body = ttk.Frame(parent)
+            txt = tk.Text(body, height=min(14, max(4, text.count("\n") + 2)), wrap="word",
+                          relief="flat", background=self._mix(self.fg, self.bg, 0.06),
+                          foreground=self.fg)
+            txt.pack(side="left", fill="both", expand=True)
+            txt.insert("end", text)
+            txt.configure(state="disabled")
+            sb = ttk.Scrollbar(body, orient="vertical", command=txt.yview)
+            sb.pack(side="right", fill="y")
+            txt.configure(yscrollcommand=sb.set)
+
+            def flip():
+                state["on"] = not state["on"]
+                if state["on"]:
+                    body.pack(fill="x", pady=(4, 4))
+                    btn.configure(text="▾ " + label)
+                else:
+                    body.pack_forget()
+                    btn.configure(text="▸ " + label)
+            btn = ttk.Button(parent, text="▸ " + label, command=flip)
+            btn.pack(side=side, padx=(0, 6))
+            add_tip(btn, T("Show or hide the background detail."))
+            return btn
+
+        def _groups_detail_text(self) -> str:
+            """Friendly prose about the cast groups — no engine internals."""
+            return help_line(GROUP_HELP, ("about", "groups", "intro"), "")
+
+        def _groups_evidence_text(self) -> str:
+            """The research trail behind the group list, for the curious.
+
+            Kept behind its own clearly-technical toggle: it names Unity and
+            IL2CPP internals, which is good evidence and poor onboarding."""
+            ev = evidence_text()
+            return (T("Where this list comes from:") + "\n" + ev) if ev else ""
+
+        def _locked_detail_text(self) -> str:
+            lines = [T("These look editable in other tools, but changing them here would do "
+                       "nothing or cannot be stored at all:")]
+            for name, why in INERT_FIELDS.items():
+                lines.append("· " + name + " — " + T(why) + ".")
+            lines.append(T("· Text fields that ship empty (%s) have no room reserved for any "
+                           "text at all, so they cannot hold a value. That is why the API key "
+                           "lives in Remote Mode: the translator holds it, and the game keeps "
+                           "talking to the translator.") % ", ".join(EMPTY_TEXT_FIELDS))
+            return "\n".join(lines)
+
+        def _field_grid(self, parent, fields, varmap, kind, columns=2):
+            rows = max(1, -(-len(fields) // columns))
+            for i, name in enumerate(fields):
+                col, row = divmod(i, rows)
+                entry = SETTING_HELP.get(name)
+                label = name
+                if isinstance(entry, dict) and _as_text(entry.get("label")):
+                    label = _as_text(entry.get("label"))
+                lab = ttk.Label(parent, text=str(label) + ":", anchor="w")
+                lab.grid(row=row, column=col * 2, sticky="w",
+                         padx=(0 if col == 0 else 22, 4), pady=3)
                 var = tk.StringVar()
-                ttk.Entry(inner, textvariable=var, width=14).grid(row=i, column=1, padx=4, pady=1)
-                ttk.Label(inner, text=tip, foreground="#666").grid(row=i, column=2, sticky="w")
-                self.agent_vars[name] = var
-            for i, (name, kind, tip) in enumerate(LLM_FIELDS_GUI):
-                ttk.Label(right, text=name).grid(row=i, column=0, sticky="w", pady=1)
-                var = tk.StringVar()
-                ttk.Entry(right, textvariable=var, width=14).grid(row=i, column=1, padx=4, pady=1)
-                ttk.Label(right, text=tip, foreground="#666").grid(row=i, column=2, sticky="w")
-                self.llm_vars[name] = var
-            btns = ttk.Frame(f); btns.pack(fill="x")
-            b = ttk.Button(btns, text="Load current values", command=self.load_values); b.pack(side="left")
-            self.action_buttons.append(b)
-            b = ttk.Button(btns, text="Clear (leave unchanged)", command=self.clear_values); b.pack(side="left", padx=6)
-            b = ttk.Button(btns, text="Game defaults", command=self.load_defaults); b.pack(side="left")
-            b = ttk.Button(btns, text="Preview changes", command=self.preview); b.pack(side="left", padx=6)
-            self.action_buttons.append(b)
-            b = ttk.Button(btns, text="Apply to game files", command=self.apply_changes)
-            b.pack(side="left"); self.action_buttons.append(b)
+                ent = ttk.Entry(parent, textvariable=var, width=11)
+                ent.grid(row=row, column=col * 2 + 1, sticky="w", pady=3)
+                varmap[name] = var
+                tip = setting_tip(name, self._field_note(kind, name))
+                tech = T("Field name in the game files: ") + name
+                if name in INERT_FIELDS:
+                    tech += "\n" + T("Not editable: ") + T(INERT_FIELDS[name])
+                for w in (lab, ent):
+                    add_tip(w, tip + "\n" + tech)
 
-        # ---------- tab: backups ---------- #
+        def _field_note(self, kind, name) -> str:
+            table = AGENT_FIELDS_GUI if kind == "AGENT" else LLM_FIELDS_GUI
+            for n, _k, note in table:
+                if n == name:
+                    return note or ""
+            for n, _k, note in (LLM_FIELDS_GUI if kind == "AGENT" else AGENT_FIELDS_GUI):
+                if n == name:
+                    return note or ""
+            return ""
+
+        def _select_group(self, key):
+            key = normalize_group(key) or all_group_key()
+            self.current_group = key
+            self.cfg["cast_group"] = key
+            label = group_label(key)
+            self.group_var.set(label)
+            self._update_group_scope()
+
+        def _group_changed(self):
+            label = self.group_combo.get().strip()
+            key = next((k for k, lab in self.group_choices if lab == label), all_group_key())
+            self._select_group(key)
+            self.status(T("Editing: ") + group_label(key))
+            self.log(T("Character group: ") + group_label(key) + " — " +
+                     T("press “Load current values” to see what this group uses now."))
+
+        def _update_group_scope(self):
+            key = self.current_group
+            label = group_label(key)
+            lines = [T("Editing: ") + label]
+            names = group_characters(key)
+            if names:
+                shown = ", ".join(names[:16]) + (T(", and more") if len(names) > 16 else "")
+                lines.append(T("In this group: ") + shown)
+            if self.scan is not None:
+                hits = group_blobs(self.scan, key)
+                scope_word = (T(" across every character.") if normalize_group(key) is None
+                              else T(" in this group."))
+                lines.append(T("Settings found for ") +
+                             friendly_count(len(hits), "character", "characters") + scope_word)
+                if normalize_group(key) is not None and not hits:
+                    lines.append(T("Nothing matched this group in the last scan — press "
+                                   "Re-scan, or choose “All characters”."))
+            else:
+                lines.append(T("The game files have not been read yet — press Re-scan to see "
+                               "how many characters this covers."))
+            note = group_note(key)
+            if note:
+                lines.append(note)
+            self.scope_var.set("\n".join(lines))
+            if self.scope_tip:
+                self.scope_tip.set_text(
+                    T("Edits are written only to the characters of this group; every other "
+                      "character keeps its current settings.") +
+                    "\n" + T("Under the hood: each group's characters live in their own game "
+                             "asset files, which is what makes per-group edits possible."))
+
+        def reset_defaults(self, scope_all: bool = False):
+            if scope_all:
+                self._select_group(all_group_key())
+            for name, var in self.agent_vars.items():
+                if name in STOCK_CHARACTER_VALUES:
+                    var.set(STOCK_CHARACTER_VALUES[name])
+            # the shipped values of the three fixed fields the grid does not expose
+            self.extra_overrides = dict(STOCK_EXTRA_VALUES)
+            label = group_label(self.current_group)
+            self.reset_hint.configure(
+                text=T("Shipped values are in the boxes for ") + label +
+                T(" — Preview shows the difference, Apply writes them."))
+            self.status(T("Game defaults loaded for ") + label)
+            self.log(T("Put the shipped values into the form for ") + label + ". " +
+                     T("Preview shows what would change; Apply writes them, backup first."))
+            self.preview()
+
+        # ---------- tab: backup ---------- #
         def _tab_backup(self):
-            f = ttk.Frame(self.nb, padding=10)
-            self.nb.add(f, text=" Backup / restore ")
-            from tkinter import ttk as _ttk
-            self.bk_tree = _ttk.Treeview(f, columns=("when", "files", "game", "labels"),
-                                         show="headings", height=12)
-            for c, w in (("when", 170), ("files", 60), ("game", 300), ("labels", 380)):
-                self.bk_tree.heading(c, text=c.title()); self.bk_tree.column(c, width=w, anchor="w")
+            f = ttk.Frame(self.nb)
+            self.tab_frames["backup"] = f
+            c = self._scrolled(f)
+            head = ttk.Label(c, text=T("Backups and undo"), font=("TkDefaultFont", 14, "bold"))
+            head.pack(anchor="w")
+            sub = ttk.Label(c, foreground=self.muted, wraplength=980, justify="left", text=T(
+                "Every change makes a checked backup of the game files first, stored outside the "
+                "game folder. Restoring puts the original bytes back. Steam's “verify integrity "
+                "of game files” is another way back to a fresh install."))
+            sub.pack(anchor="w", pady=(2, 8))
+            add_tip(sub, T("Backups are kept until you remove them; the newest one is at the "
+                           "top of the list."))
+            self.bk_tree = ttk.Treeview(c, columns=("when", "files", "game", "labels"),
+                                        show="headings", height=12)
+            for col, w, t in (("when", 170, T("When")), ("files", 60, T("Files")),
+                              ("game", 300, T("Game folder")),
+                              ("labels", 380, T("What changed"))):
+                self.bk_tree.heading(col, text=t)
+                self.bk_tree.column(col, width=w, anchor="w")
             self.bk_tree.pack(fill="both", expand=True)
-            row = ttk.Frame(f); row.pack(fill="x", pady=6)
-            b = ttk.Button(row, text="Refresh", command=self.refresh_backups); b.pack(side="left")
-            b = ttk.Button(row, text="Restore selected", command=self.restore_selected); b.pack(side="left", padx=6)
+            add_tip(self.bk_tree, T("One row per backup. Select a row, then Restore to put those "
+                                    "files back."))
+            row = ttk.Frame(c)
+            row.pack(fill="x", pady=6)
+            b = ttk.Button(row, text=T("Refresh"), command=self.refresh_backups)
+            b.pack(side="left")
+            add_tip(b, T("Re-read the backup folder."))
+            b = ttk.Button(row, text=T("Restore selected"), command=self.restore_selected)
+            b.pack(side="left", padx=6)
             self.action_buttons.append(b)
-            b = ttk.Button(row, text="Open backup folder", command=self.open_backups); b.pack(side="left")
-            ttk.Label(f, foreground="#555", text=(
-                "Restoring puts the original files back byte-for-byte (sha256 verified). "
-                "Steam's 'verify integrity of game files' is another way back to stock.")).pack(anchor="w", pady=(6, 0))
+            add_tip(b, T("Put the selected backup's files back, byte for byte. The game must be "
+                         "closed."))
+            b = ttk.Button(row, text=T("Open backup folder"), command=self.open_backups)
+            b.pack(side="left")
+            add_tip(b, T("Show the backups in your file manager."))
+            self._build_footer(c)
             self.refresh_backups()
-
-        # ---------- actions: game ---------- #
+        # ---------- actions: game folder ---------- #
         def browse(self):
-            d = filedialog.askdirectory(title="Select the Vaudeville game folder")
+            d = filedialog.askdirectory(title=T("Choose the Vaudeville game folder"))
             if d:
                 self.dir_var.set(d)
                 self.rescan()
@@ -2796,7 +4717,10 @@ def gui_main(args) -> int:
         def detect(self):
             found = find_game_dirs()
             if not found:
-                messagebox.showwarning(APP_NAME, "No Vaudeville install found.")
+                self.info_var.set(T("Game not found — press Browse… and choose the Vaudeville "
+                                    "folder yourself (it contains a Vaudeville_Data folder)."))
+                self.status(T("game not found"))
+                messagebox.showwarning(APP_NAME, T("No Vaudeville install found."))
                 return
             for p, src in found:
                 self.log(f"detected {p}  ({src})")
@@ -2808,7 +4732,8 @@ def gui_main(args) -> int:
         def rescan(self):
             gd = self.game_dir()
             if gd is None:
-                messagebox.showwarning(APP_NAME, "Set the game folder first.")
+                self.info_var.set(T("Game not found — set the game folder first."))
+                messagebox.showwarning(APP_NAME, T("Set the game folder first."))
                 return
 
             def work():
@@ -2816,17 +4741,42 @@ def gui_main(args) -> int:
 
             def done(res):
                 self.scan = res
-                self.info_var.set(
-                    f"{gd}\nbuild-guid {build_guid(gd)}   ·   {len(res.blobs)} LLMUnity components "
-                    f"({len(res.llm)} LLM, {len(res.agents)} agents)   ·   scan {res.duration:.1f}s\n"
-                    + res.summary())
+                self.info_var.set(self._scan_text(gd, res))
+                if self.info_tip:
+                    self.info_tip.set_text(T("Where the game was found, which build it is, and "
+                                             "how many character and engine settings this tool "
+                                             "can see.") + "\n" + res.friendly_summary())
                 for n in res.notes:
                     self.log("note: " + n)
                 self.load_values()
                 self.refresh_models()
-                self.status(f"scanned {len(res.blobs)} components")
-                self.log("scan complete: " + res.summary())
-            self.run(work, done, "scanning game assets…")
+                self._update_group_scope()
+                self._update_gpu_line()
+                self._check_host_fit()
+                self.status(T("Read ") +
+                            friendly_count(len(res.agents), "character", "characters") +
+                            T(" and ") +
+                            friendly_count(len(res.llm), "engine setting block",
+                                           "engine setting blocks"))
+                self.log(T("Scan complete: ") + res.friendly_summary())
+                log("scan detail: " + res.summary())
+            self.run(work, done, T("reading the game files…"))
+
+        def _scan_text(self, gd: Path, res: ScanResult) -> str:
+            lines = [T("Game found: ") + str(gd),
+                     T("Build: ") + build_guid(gd)]
+            if res.agents or res.llm:
+                lines.append(T("Ready to edit: settings for ") +
+                             friendly_count(len(res.agents), "character", "characters") +
+                             T(" and ") +
+                             friendly_count(len(res.llm), "AI engine block", "AI engine blocks")
+                             + ".")
+            else:
+                lines.append(T("No AI settings found in this folder — is it the Vaudeville "
+                               "install?"))
+            if res.notes:
+                lines.append("Worth knowing: " + "; ".join(res.notes[:2]))
+            return "\n".join(lines)
 
         def _initial_scan(self):
             if not self.dir_var.get().strip():
@@ -2840,7 +4790,7 @@ def gui_main(args) -> int:
             if gd and gd.is_dir():
                 pids = game_is_running(gd)
                 if pids:
-                    txt = f"⚠ game is RUNNING (pid {', '.join(map(str, pids))}) — patching is blocked"
+                    txt = T("⚠ the game is RUNNING — close it before applying changes")
             self.running_lbl.configure(text=txt)
             self.after(3000, self._poll_running)
 
@@ -2848,46 +4798,123 @@ def gui_main(args) -> int:
         def refresh_models(self):
             gd = self.game_dir()
             if gd is None:
+                for panel in self.model_panels:
+                    panel["lib_var"].set(T("Model folder: available once the game is found."))
                 return
             models = list_library_models(gd)
-            self.lib_var.set(f"library: {library_dir(gd)}   ({len(models)} GGUF files)")
             names = [str(p) for p in models]
-            for slot in model_slots():
-                cur, combo = self.model_rows[slot.name]
-                combo["values"] = names
-                st = slot_status(gd, slot)
-                tgt = st["target"] or "-"
-                cur.configure(text=(f"current: {tgt}   ({human_size(st['size'])}"
-                                    f"{', symlink' if st['is_link'] else ', real file'}"
-                                    f"{', BROKEN LINK' if st['broken'] else ''})"))
-                preset = self.cfg.get("primary_model" if slot.name == PRIMARY_MODEL_NAME else "deck_model")
-                if preset and preset in names:
-                    combo.set(preset)
-                elif st["target"]:
-                    combo.set(st["target"])
+            family = [n for n in names if is_llama3_8b_family(Path(n).name)]
+            for panel in self.model_panels:
+                panel["lib_var"].set(
+                    T("Model folder: ") + f"{library_dir(gd)}   (" +
+                    friendly_count(len(models), "model file", "model files") +
+                    (f", {len(family)} " + T("in the allowed family")
+                     if panel["restrict"] else "") + ")")
+                warns = []
+                allowed = family if panel["restrict"] else names
+                for slot in model_slots():
+                    cur, combo = panel["rows"][slot.name]
+                    combo["values"] = allowed
+                    st = slot_status(gd, slot)
+                    tgt = st["target"] or "-"
+                    kind = T("a file you chose") if st["is_link"] else T("the shipped file")
+                    cur.configure(text=T("in use now: ") +
+                                  f"{tgt}  ({human_size(st['size'])}, {kind}" +
+                                  (", " + T("BROKEN LINK") if st["broken"] else "") + ")")
+                    tip = panel["cur_tips"].get(slot.name)
+                    if tip is not None:
+                        tip.set_text(T("What the game loads for ") + slot.label + "." +
+                                     "\n" + T("Under the hood: the file name ") + slot.name +
+                                     T(" inside the game's StreamingAssets folder."))
+                    preset = self.cfg.get("primary_model"
+                                          if slot.name == PRIMARY_MODEL_NAME else "deck_model")
+                    if preset and preset in allowed:
+                        combo.set(preset)
+                    elif st["target"]:
+                        combo.set(st["target"])
+                    panel["last"][slot.name] = combo.get()
+                    if panel["restrict"] and st["target"] and \
+                            not is_llama3_8b_family(Path(st["target"]).name):
+                        if slot.name == DECK_MODEL_NAME and \
+                                Path(st["target"]).name == DECK_MODEL_NAME:
+                            pass  # the shipped Steam Deck fallback: this setup leaves it alone
+                        elif slot.name == DECK_MODEL_NAME:
+                            warns.append(T("“%s” is linked into the Steam Deck / fallback slot "
+                                           "and is not from the %s family. %s leaves that slot "
+                                           "alone, but the game may still load it on a handheld.")
+                                         % (Path(st["target"]).name, LLAMA3_8B_FAMILY,
+                                            mode_label(MODE_OFF)))
+                        else:
+                            warns.append(T("“%s” is not from the %s family, so %s cannot use it — "
+                                           "choose another model here, or use a different setup.")
+                                         % (Path(st["target"]).name, LLAMA3_8B_FAMILY,
+                                            mode_label(MODE_OFF)))
+                if panel["warn"] is not None:
+                    panel["warn"].configure(text="\n".join(warns))
 
-        def pick_model(self, combo):
-            f = filedialog.askopenfilename(title="Choose a GGUF model",
-                                           filetypes=[("GGUF models", "*.gguf"), ("All files", "*")])
+        def pick_model(self, panel, combo, slot):
+            f = filedialog.askopenfilename(title=T("Choose a model file"),
+                                           filetypes=[(T("Model files"), "*.gguf"),
+                                                      (T("All files"), "*")])
             if f:
                 combo.set(f)
+                self._model_chosen(panel, combo, slot, modal=True)
 
-        def apply_model(self, slot, combo, label):
+        def _model_allowed(self, panel, filename: str, modal: bool) -> bool:
+            if not panel["restrict"] or is_llama3_8b_family(Path(filename).name):
+                return True
+            card = MODE_CARDS[MODE_OFF]
+            restriction = str(card.get("restrictions") or "")
+            msg = (T("“%s” cannot be used in %s.") % (Path(filename).name,
+                                                      mode_label(MODE_OFF)) +
+                   "\n\n" + T("Restriction: ") + restriction +
+                   "\n\n" + T("Nothing was changed. Choose a model from the %s family, or "
+                              "switch setup on the Home tab to use any model.")
+                   % LLAMA3_8B_FAMILY)
+            self.log(T("Refused: ") + msg.replace("\n", " "))
+            if panel["warn"] is not None:
+                panel["warn"].configure(text=T("Refused: only the %s family works in %s.")
+                                        % (LLAMA3_8B_FAMILY, mode_label(MODE_OFF)))
+            if modal:
+                messagebox.showwarning(APP_NAME, msg)
+            return False
+
+        def _model_chosen(self, panel, combo, slot, modal: bool):
+            value = combo.get().strip()
+            if not value:
+                return
+            if not self._model_allowed(panel, value, modal):
+                combo.set(panel["last"].get(slot.name, ""))
+                return
+            panel["last"][slot.name] = value
+            if panel["warn"] is not None:
+                panel["warn"].configure(text="")
+            self.status(T("Model chosen for ") + slot.label +
+                        T(" — press “Use this model”."))
+
+        def apply_model(self, panel, slot):
             gd = self.game_dir()
+            _cur, combo = panel["rows"][slot.name]
             target = combo.get().strip()
             if gd is None or not target:
-                messagebox.showwarning(APP_NAME, "Pick a game folder and a model first.")
+                messagebox.showwarning(APP_NAME, T("Choose a game folder and a model file first."))
+                return
+            if not self._model_allowed(panel, target, modal=True):
                 return
 
             def work():
                 return set_slot_model(gd, slot, Path(target))
+
             def done(lines):
-                for l in lines:
-                    self.log(l)
+                for line in lines:
+                    self.log(line)
+                key = "primary_model" if slot.name == PRIMARY_MODEL_NAME else "deck_model"
+                self.cfg[key] = target
                 self.refresh_models()
-                self.cfg["primary_model" if slot.name == PRIMARY_MODEL_NAME else "deck_model"] = target
-                save_config(self._collect_config())
-            self.run(work, done, f"linking {slot.name}…")
+                self._save_cfg()
+                self.status(T("The game now loads ") + Path(target).name +
+                            T(" for ") + slot.label)
+            self.run(work, done, T("switching model…"))
 
         def open_library(self):
             gd = self.game_dir()
@@ -2897,42 +4924,47 @@ def gui_main(args) -> int:
             d.mkdir(parents=True, exist_ok=True)
             open_in_folder(d)
 
-        # ---------- actions: remote ---------- #
-        def _mode_changed(self):
-            self.status("mode: " + mode_label(self.mode_var.get()))
-
+        # ---------- actions: remote service ---------- #
         def _toggle_key(self):
             try:
                 self.key_entry.configure(show="" if self.showkey_var.get() else "*")
-            except Exception:
+            except Exception:                                # noqa: BLE001
                 pass
 
         def load_bitwarden(self):
             if shutil.which("bw") is None:
-                messagebox.showerror(APP_NAME, "Bitwarden CLI 'bw' not found in PATH.")
+                messagebox.showerror(APP_NAME, T("The Bitwarden command line (bw) was not found. "
+                                                 "Install it, or type the key in by hand."))
                 return
             try:
-                status = subprocess.run(["bw", "status"], capture_output=True, text=True, timeout=20)
+                status = subprocess.run(["bw", "status"], capture_output=True, text=True,
+                                        timeout=20)
                 info = json.loads(status.stdout or "{}")
-            except Exception as exc:
-                messagebox.showerror(APP_NAME, f"bw status failed: {exc}")
+            except Exception as exc:                         # noqa: BLE001
+                messagebox.showerror(APP_NAME, T("Could not read the Bitwarden status: ") + str(exc))
                 return
             if info.get("status") != "unlocked":
-                messagebox.showwarning(APP_NAME, "The Bitwarden vault is locked; run 'bw unlock' first.")
+                messagebox.showwarning(APP_NAME, T("Your Bitwarden vault is locked; run "
+                                                   "“bw unlock” first."))
                 return
             try:
                 items = subprocess.run(["bw", "list", "items", "--search", "llm"],
                                        capture_output=True, text=True, timeout=60)
                 data = json.loads(items.stdout or "[]")
-            except Exception as exc:
-                messagebox.showerror(APP_NAME, f"bw list failed: {exc}")
+            except Exception as exc:                         # noqa: BLE001
+                messagebox.showerror(APP_NAME, T("Could not list Bitwarden items: ") + str(exc))
                 return
-            names = [f"{i.get('name')}  [{i.get('id','')[:8]}]" for i in data if i.get("name")]
+            names = [f"{i.get('name')}  [{i.get('id', '')[:8]}]" for i in data if i.get("name")]
             if not names:
-                messagebox.showinfo(APP_NAME, "No Bitwarden items matching 'llm'.")
+                messagebox.showinfo(APP_NAME, T("No Bitwarden items matching “llm”."))
                 return
-            win = tk.Toplevel(self); win.title("Pick a Bitwarden item"); win.geometry("460x320")
-            lb = tk.Listbox(win); lb.pack(fill="both", expand=True, padx=8, pady=8)
+            win = tk.Toplevel(self)
+            win.title(T("Pick a saved key"))
+            win.geometry("460x320")
+            tk.Label(win, text=T("Keys are never written to the log."), anchor="w",
+                     padx=8, pady=(8, 0)).pack(fill="x")
+            lb = tk.Listbox(win)
+            lb.pack(fill="both", expand=True, padx=8, pady=8)
             for n in names:
                 lb.insert("end", n)
 
@@ -2941,10 +4973,7 @@ def gui_main(args) -> int:
                 if not sel:
                     return
                 item = data[sel[0]]
-                secret = ""
-                for f in ("login",):
-                    login = item.get(f) or {}
-                    secret = login.get("password") or ""
+                secret = ((item.get("login") or {}).get("password")) or ""
                 if not secret:
                     for fld in item.get("fields") or []:
                         if fld.get("type") == 1:
@@ -2952,15 +4981,18 @@ def gui_main(args) -> int:
                             break
                 if secret:
                     self.apikey_var.set(secret)
-                    self.log(f"loaded API key for Bitwarden item '{item.get('name')}' (not logged)")
+                    self.log(T("Loaded an API key from Bitwarden item “%s” (value not logged).")
+                             % item.get("name"))
                 else:
-                    self.log("that Bitwarden item has no password/hidden field")
+                    self.log(T("That Bitwarden item has no password or hidden field."))
                 win.destroy()
-            ttk.Button(win, text="Use selected key", command=take).pack(pady=(0, 8))
+            ok = ttk.Button(win, text=T("Use this key"), command=take)
+            ok.pack(pady=(0, 8))
+            add_tip(ok, T("Copy the selected key into the API key box."))
 
         def shim_cfg(self) -> dict:
             return {"listen": self.listen_var.get().strip() or "127.0.0.1",
-                    "port": int(self.shimport_var.get() or 13333),
+                    "port": self._int_or(self.shimport_var, 13333, T("Translator port")),
                     "mode": self.shimmode_var.get(),
                     "backend_url": self.backend_var.get().strip(),
                     "backend_model": self.bmodel_var.get().strip(),
@@ -2971,39 +5003,49 @@ def gui_main(args) -> int:
 
         def shim_start(self):
             sp = ShimProcess(self.shim_cfg())
+
             def work():
                 return sp.start()
+
             def done(res):
                 ok, msg = res
-                self.log(msg)
+                self.log(T(msg))
                 self._update_shim_state(sp)
                 if ok:
-                    save_config(self._collect_config())
-            self.run(work, done, "starting shim…")
+                    self._save_cfg()
+            self.run(work, done, T("starting the translator…"))
 
         def shim_stop(self):
             sp = ShimProcess(self.shim_cfg())
+
             def work():
                 return sp.stop()
+
             def done(msg):
-                self.log(msg); self._update_shim_state(sp)
-            self.run(work, done, "stopping shim…")
+                self.log(T(msg))
+                self._update_shim_state(sp)
+            self.run(work, done, T("stopping the translator…"))
 
         def shim_test(self):
             sp = ShimProcess(self.shim_cfg())
+
             def work():
                 return sp.test_completion("Say hello in three words.")
+
             def done(res):
                 ok, text = res
-                self.log(("shim test OK: " if ok else "shim test FAILED: ") + text)
+                self.log((T("Test worked: ") if ok else T("Test failed: ")) + text)
                 if not ok:
                     self.log(sp.tail(20))
-            self.run(work, done, "testing shim → backend…")
+            self.run(work, done, T("testing game → translator → service…"))
 
         def shim_log(self):
             sp = ShimProcess(self.shim_cfg())
-            win = tk.Toplevel(self); win.title(f"shim log — {SHIM_LOG_FILE}"); win.geometry("820x460")
-            t = tk.Text(win, wrap="word", background="#111", foreground="#cfc"); t.pack(fill="both", expand=True)
+            win = tk.Toplevel(self)
+            win.title(T("Translator log — ") + str(SHIM_LOG_FILE))
+            win.geometry("860x480")
+            t = tk.Text(win, wrap="word", background="#111", foreground="#cfc")
+            t.pack(fill="both", expand=True)
             t.insert("end", sp.tail(400))
             t.see("end")
 
@@ -3011,32 +5053,54 @@ def gui_main(args) -> int:
             pid = sp.pid()
             ok, _ = sp.health() if pid else (False, "")
             if pid and ok:
-                self.shim_state.configure(text=f"● running (pid {pid})", foreground="#2a2")
+                self.shim_state.configure(text=T("● running (pid %s)") % pid,
+                                          foreground=self.ok_fg)
             elif pid:
-                self.shim_state.configure(text=f"● started but unhealthy (pid {pid})", foreground="#c80")
+                self.shim_state.configure(text=T("● started but not answering (pid %s)") % pid,
+                                          foreground="#c80")
             else:
-                self.shim_state.configure(text="● stopped", foreground="#a33")
-
-        # ---------- actions: patching ---------- #
+                self.shim_state.configure(text=T("● stopped"), foreground=self.warn_fg)
+        # ---------- actions: settings ---------- #
         def _collect_config(self) -> dict:
             cfg = dict(self.cfg)
+            mode = normalize_mode(self.chosen_mode or self.mode_pick_var.get(), MODE_OFF)
+            shim_url = self.backend_var.get().strip()
+            direct_host = self.direct_host_var.get().strip()
             cfg.update({
                 "game_dir": self.dir_var.get().strip(),
-                "mode": self.mode_var.get(),
-                "backend_url": self.backend_var.get().strip(),
+                "mode": mode,
+                "mode_confirmed": bool(self.chosen_mode),
+                # build_change_set() reads backend_url; in Local Mode - Advanced that is the
+                # plain server address, otherwise it is the OpenAI-compatible BaseURL.
+                "backend_url": direct_host if mode == MODE_DIRECT else shim_url,
+                "shim_backend_url": shim_url,
+                "direct_host": direct_host,
+                "direct_port": self._int_or(self.direct_port_var, 0, T("Server port")),
                 "backend_model": self.bmodel_var.get().strip(),
                 "save_api_key": bool(self.savekey_var.get()),
                 "api_key": self.apikey_var.get() if self.savekey_var.get() else cfg.get("api_key", ""),
                 "shim_listen": self.listen_var.get().strip(),
-                "shim_port": int(self.shimport_var.get() or 13333),
+                "shim_port": self._int_or(self.shimport_var, 13333, T("Translator port")),
                 "shim_mode": self.shimmode_var.get(),
                 "strip_think": bool(self.strip_var.get()),
                 "expose_server": bool(self.expose_var.get()),
-                "server_port": int(self.serverport_var.get() or 13333),
+                "server_port": self._int_or(self.serverport_var, 13333, T("Server port")),
+                "cast_group": self.current_group,
             })
             if not cfg.get("save_api_key"):
                 cfg["api_key"] = ""
             return cfg
+
+        def _plan_group(self):
+            """Group the pending character edits apply to (None = every character)."""
+            key = normalize_group(self.current_group)
+            if key is None:
+                return None
+            if not group_known(key):
+                self.log(T("Character group “%s” is unknown here, so the edits will go to every "
+                           "character.") % key)
+                return None
+            return key
 
         def _overrides(self) -> dict:
             out = {}
@@ -3046,97 +5110,125 @@ def gui_main(args) -> int:
                     continue
                 try:
                     out[name] = coerce_for("AGENT", name, txt)
-                except Exception as exc:
-                    self.log(f"ignoring agent field {name}: {exc}")
+                except Exception as exc:                     # noqa: BLE001
+                    self.log(T("Ignoring “%s” — %s") % (name, exc))
             for name, var in self.llm_vars.items():
                 txt = var.get().strip()
                 if txt == "":
                     continue
                 try:
                     out[name] = coerce_for("LLM", name, txt)
-                except Exception as exc:
-                    self.log(f"ignoring LLM field {name}: {exc}")
+                except Exception as exc:                     # noqa: BLE001
+                    self.log(T("Ignoring “%s” — %s") % (name, exc))
+            for name, value in self.extra_overrides.items():
+                out.setdefault(name, value)
             return out
 
         def _plan(self):
             if self.scan is None:
-                raise PatchError("scan the game first (Re-scan button)")
+                raise PatchError(T("Read the game files first (Re-scan button at the top)."))
             cfg = self._collect_config()
             self.cfg = cfg
-            agent_changes, llm_changes, notes = build_change_set(cfg, self.scan, self._overrides())
-            edits, warnings = plan_edits(self.scan, agent_changes, llm_changes)
-            return edits, warnings, notes, agent_changes, llm_changes
+            group = self._plan_group()
+            agent_changes, llm_changes, notes = build_change_set(cfg, self.scan,
+                                                                self._overrides(), group=group)
+            edits, warnings = plan_edits(self.scan, agent_changes, llm_changes,
+                                        agent_group=group)
+            return edits, warnings, notes, agent_changes, llm_changes, group
 
-        def _show_plan(self, edits, warnings, notes):
-            self.plan_box.configure(state="normal")
-            self.plan_box.delete("1.0", "end")
-            for n in notes:
-                self.plan_box.insert("end", "• " + n + "\n")
-            for w in warnings:
-                self.plan_box.insert("end", "⚠ " + w + "\n")
-            self.plan_box.insert("end", f"\n{len(edits)} byte edit(s):\n")
-            for e in edits:
-                self.plan_box.insert("end", f"  {e.label}\n")
-            if not edits:
-                self.plan_box.insert("end", "  (nothing to change — the game already has these values)\n")
-            self.plan_box.configure(state="disabled")
+        def _friendly_edit_label(self, label: str) -> str:
+            out = str(label)
+            if out.startswith("AGENT."):
+                out = T("character ") + out[len("AGENT."):]
+            elif out.startswith("LLM."):
+                out = T("engine ") + out[len("LLM."):]
+            return T(out)
+
+        def _show_plan(self, edits, warnings, notes, group=None):
+            mode = mode_label(normalize_mode(self.cfg.get("mode"), MODE_OFF))
+            head = [T("Setup: ") + mode,
+                    T("Characters: ") + group_label(group)]
+            for box in self.plan_boxes.values():
+                box.configure(state="normal")
+                box.delete("1.0", "end")
+                box.insert("end", " · ".join(head) + "\n")
+                for n in notes:
+                    box.insert("end", "• " + n + "\n")
+                for w in warnings:
+                    box.insert("end", "⚠ " + w + "\n")
+                box.insert("end", "\n" + T("Changes: ") +
+                           friendly_count(len(edits), "value", "values") + "\n")
+                for e in edits:
+                    box.insert("end", "  " + self._friendly_edit_label(e.label) + "\n")
+                if not edits:
+                    box.insert("end", "  " + T("(nothing to change — the game already has "
+                                              "these values)") + "\n")
+                box.configure(state="disabled")
 
         def preview(self):
             def work():
                 return self._plan()
+
             def done(res):
-                edits, warnings, notes, ag, llm = res
-                self._show_plan(edits, warnings, notes)
-                self.log(f"preview: {len(edits)} edits, {len(warnings)} warnings")
-                self.status(f"{len(edits)} edits planned")
-            self.run(work, done, "planning changes…")
+                edits, warnings, notes, _ag, _llm, group = res
+                self._show_plan(edits, warnings, notes, group)
+                self.log(T("Preview: ") + friendly_count(len(edits), "change", "changes") +
+                         ", " + friendly_count(len(warnings), "warning", "warnings"))
+                self.status(friendly_count(len(edits), "change", "changes") + T(" planned"))
+            self.run(work, done, T("working out the changes…"))
 
         def apply_changes(self):
             def work():
                 return self._plan()
+
             def done(res):
-                edits, warnings, notes, ag, llm = res
-                self._show_plan(edits, warnings, notes)
+                edits, warnings, notes, _ag, _llm, group = res
+                self._show_plan(edits, warnings, notes, group)
                 if not edits:
-                    messagebox.showinfo(APP_NAME, "Nothing to change.")
+                    messagebox.showinfo(APP_NAME, T("Nothing to change."))
                     return
                 gd = self.game_dir()
-                if not messagebox.askyesno(
-                        APP_NAME,
-                        f"Apply {len(edits)} byte edit(s) to\n{gd}\n\n"
-                        "A hash-verified backup is written first.\nContinue?"):
+                ask = (T("Write %s to the game files in") %
+                       friendly_count(len(edits), "change", "changes") + f"\n{gd}\n\n" +
+                       T("Setup: ") + mode_label(normalize_mode(self.cfg.get("mode"), MODE_OFF)) +
+                       "\n" + T("Characters: ") + group_label(group) + "\n\n" +
+                       T("A checked backup is made first, and the game must be closed.") +
+                       "\n" + T("Continue?"))
+                if not messagebox.askyesno(APP_NAME, ask):
                     return
+
                 def work2():
                     rec = apply_edits(edits, gd)
                     return rec, scan_game(gd, use_profile=False)
+
                 def done2(res2):
                     rec, res2 = res2
                     self.scan = res2
-                    self.log(f"applied {len(edits)} edits; backup at {rec.dir}")
-                    self.log("verification: " + res2.summary())
+                    self.info_var.set(self._scan_text(gd, res2))
+                    self.log(T("Wrote %s; backup at %s") % (len(edits), rec.dir))
+                    self.log(T("Checked afterwards: ") + res2.friendly_summary())
+                    log("post-write detail: " + res2.summary())
+                    self.extra_overrides = {}
                     self.load_values()
-                    sample = res2.agents[0].values if res2.agents else {}
-                    keys = [k for k in ("remote", "host", "port", "temperature", "numPredict") if k in sample]
-                    self.log("first agent now: " + ", ".join(f"{k}={sample[k]!r}" for k in keys))
-                    save_config(self._collect_config())
+                    self._update_group_scope()
+                    self._update_gpu_line()
+                    self._save_cfg()
                     self.refresh_backups()
-                    messagebox.showinfo(APP_NAME, f"Applied.\nBackup: {rec.dir}")
-                self.run(work2, done2, "patching game files…")
-            self.run(work, done, "planning changes…")
+                    messagebox.showinfo(APP_NAME, T("Done — the game will use the new settings "
+                                                    "next time it starts.") +
+                                        f"\n\n{T('Backup:')} {rec.dir}")
+                self.run(work2, done2, T("writing game files…"))
+            self.run(work, done, T("working out the changes…"))
 
-        def set_local(self):
-            self.mode_var.set("off")
-            self.expose_var.set(False)
-            self.preview()
-
-        # ---------- actions: parameters ---------- #
         def load_values(self):
             if self.scan is None:
                 return
+            key = self.current_group
+            agents = group_blobs(self.scan, key)
             agent_kinds = dict(AGENT_LAYOUT)
             llm_kinds = dict(LLM_LAYOUT)
-            agents = self.scan.agents
-            uniform = len({json.dumps(b.values, default=str, sort_keys=True) for b in agents}) <= 1
+            uniform = len({json.dumps(b.values, default=str, sort_keys=True)
+                           for b in agents}) <= 1
             a = agents[0].values if agents else {}
             l = self.scan.llm[0].values if self.scan.llm else {}
             for name, var in self.agent_vars.items():
@@ -3157,36 +5249,26 @@ def gui_main(args) -> int:
                 elif isinstance(v, float):
                     v = f"{v:g}"
                 var.set(str(v))
-            if agents and not uniform:
-                self.log("note: the 26 agent components do not all share the same values; "
-                         "showing the first one (edits apply to all)")
-            self.status("loaded current values")
+            label = group_label(key)
+            if not agents:
+                self.log(T("No character settings found for %s — press Re-scan or choose "
+                           "“All characters”.") % label)
+            elif not uniform and normalize_group(key) is None:
+                self.log(T("The characters do not all use the same values; showing the first "
+                           "one. Your edits are written to every character."))
+            elif not uniform:
+                self.log(T("The characters in %s do not all use the same values; showing the "
+                           "first one. Your edits are written to every character in this "
+                           "group.") % label)
+            else:
+                self.log(T("Loaded the current values for %s.") % label)
+            self.status(T("Loaded the current values"))
 
         def clear_values(self):
             for var in list(self.agent_vars.values()) + list(self.llm_vars.values()):
                 var.set("")
-            self.status("all fields cleared (nothing will be changed)")
-
-        def load_defaults(self):
-            defaults = {"temperature": "0.2", "topK": "40", "topP": "0.9", "minP": "0.05",
-                        "repeatPenalty": "1.1", "repeatLastN": "64", "presencePenalty": "0",
-                        "frequencyPenalty": "0", "typicalP": "1.0", "mirostat": "0",
-                        "mirostatTau": "5.0", "mirostatEta": "0.1", "seed": "0",
-                        "numPredict": "-1", "cachePrompt": "true", "ignoreEos": "false",
-                        "nProbs": "0", "numRetries": "5", "slot": "-1", "remote": "false",
-                        "host": "localhost", "port": "13333"}
-            for name, var in self.agent_vars.items():
-                if name in defaults:
-                    var.set(defaults[name])
-            ldef = {"contextSize": "8192", "batchSize": "512", "numThreads": "-1",
-                    "numGPULayers": "0", "parallelPrompts": "-1", "flashAttention": "false",
-                    "reasoning": "false", "remote": "false", "port": "13333",
-                    "dontDestroyOnLoad": "false", "embeddingsOnly": "false",
-                    "embeddingLength": "0", "minContextLength": "0", "maxContextLength": "131072"}
-            for name, var in self.llm_vars.items():
-                if name in ldef:
-                    var.set(ldef[name])
-            self.status("shipped defaults loaded into the form (not applied yet)")
+            self.extra_overrides = {}
+            self.status(T("All boxes cleared — nothing will be changed"))
 
         # ---------- actions: backups ---------- #
         def refresh_backups(self):
@@ -3201,21 +5283,27 @@ def gui_main(args) -> int:
         def restore_selected(self):
             sel = self.bk_tree.selection()
             if not sel:
-                messagebox.showinfo(APP_NAME, "Select a backup first.")
+                messagebox.showinfo(APP_NAME, T("Select a backup first."))
                 return
             rec = next((b for b in self._backups if str(b.dir) == sel[0]), None)
             if rec is None:
                 return
-            if not messagebox.askyesno(APP_NAME, f"Restore {len(rec.manifest['files'])} file(s) from\n{rec.dir}?"):
+            if not messagebox.askyesno(
+                    APP_NAME,
+                    T("Put these %s back over the game files?") %
+                    friendly_count(len(rec.manifest["files"]), "file", "files") +
+                    f"\n{rec.dir}\n\n" + T("The game must be closed.")):
                 return
+
             def work():
                 return restore_backup(rec, self.game_dir())
+
             def done(lines):
-                for l in lines:
-                    self.log(l)
+                for line in lines:
+                    self.log(line)
                 self.rescan()
-                messagebox.showinfo(APP_NAME, "Restore finished (see log).")
-            self.run(work, done, "restoring…")
+                messagebox.showinfo(APP_NAME, T("Restore finished — see the log."))
+            self.run(work, done, T("restoring…"))
 
         def open_backups(self):
             BACKUP_ROOT.mkdir(parents=True, exist_ok=True)
@@ -3224,11 +5312,11 @@ def gui_main(args) -> int:
         def _on_close(self):
             try:
                 save_config(self._collect_config())
-            except Exception as exc:
+            except Exception as exc:                         # noqa: BLE001
                 self.log(f"config save failed: {exc}")
             sp = ShimProcess(self.shim_cfg())
             if sp.pid():
-                if messagebox.askyesno(APP_NAME, "The shim is still running. Stop it?"):
+                if messagebox.askyesno(APP_NAME, T("The translator is still running. Stop it?")):
                     sp.stop()
             self.destroy()
 
@@ -3237,7 +5325,11 @@ def gui_main(args) -> int:
         app.withdraw()
         app.update_idletasks()
         app.update()
-        print("GUI built OK (withdrawn); tabs:", app.nb.index("end"))
+        visible = [k for k in app.tab_frames
+                   if str(app.tab_frames[k]) in set(app.nb.tabs())]
+        print("GUI built OK (withdrawn); tabs:", app.nb.index("end"),
+              "(built:", len(app.tab_frames), "|", ", ".join(app.tab_frames),
+              "| visible:", ",".join(visible), ")")
         app.destroy()
         return 0
     app.mainloop()
@@ -3296,13 +5388,30 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--config", help="internal: shim config JSON path")
     p.add_argument("--mock-backend", action="store_true", help="internal: run the mock OpenAI backend")
     p.add_argument("--gui-check", action="store_true", help="internal: build the GUI and exit")
-    p.add_argument("--tab", help="open this tab at startup (game|models|remote|parameters|backup)")
+    p.add_argument("--tab",
+                   help="open this tab at startup "
+                        "(home|basic|advanced|remote|characters|backup; the old names "
+                        "game|models|parameters are accepted as aliases)")
     p.add_argument("--quit-after", type=float, help="exit the GUI after N seconds (screenshots/testing)")
     p.add_argument("--version", action="store_true")
     return p
 
 
+def _harden_stdio() -> None:
+    """Never let a legacy console codepage crash a print.
+
+    OEM boxes (cp437/cp850) and redirected pipes on old Windows setups cannot
+    encode an em dash or a warning sign; replacing the unencodable character is
+    always better than dying mid-selftest."""
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(errors="replace")
+        except Exception:                        # noqa: BLE001 - best effort only
+            pass
+
+
 def main(argv=None) -> int:
+    _harden_stdio()
     args = build_parser().parse_args(argv)
     if args.version:
         tag = " (single-file build)" if getattr(sys, "frozen", False) else ""
