@@ -1,8 +1,8 @@
-# Vaudville Configurator
+# Vaudeville Configurator
 
 *Vaudeville* (Bumblebee Studios, Steam AppID 2240920) is a detective game built in Unity
 where the characters are not scripted: an AI running on your own machine writes every line
-they say, using LLMUnity and a llama.cpp engine bundled inside the game folder. Vaudville
+they say, using LLMUnity and a llama.cpp engine bundled inside the game folder. Vaudeville
 Configurator points that cast at the AI you actually want — your own model file, your own
 local server, or your own OpenAI-compatible service — and lets you tune how the characters
 talk.
@@ -12,11 +12,11 @@ loader and no recompiling. Every write is preceded by a checked backup, and the 
 refuses to touch anything while the game is running.
 
 The program is one self-contained Python file using the standard library plus tkinter,
-with two optional pure-data modules beside it (`vaudville_help.py` for the wording and
-`vaudville_cast.py` for the cast list). No pip installs, no UnityPy. Prebuilt single-file
+with two optional pure-data modules beside it (`Vaudeville_help.py` for the wording and
+`Vaudeville_cast.py` for the cast list). No pip installs, no UnityPy. Prebuilt single-file
 binaries are available for Linux and Windows.
 
-Project home, source, issues and downloads: <https://github.com/MidnightPhreaker/Vaudville-Configurator>
+Project home, source, issues and downloads: <https://github.com/MidnightPhreaker/Vaudeville-Configurator>
 
 ---
 
@@ -30,9 +30,9 @@ the same handful of values and never deletes anything.
 
 | setup | what it does | difficulty | restrictions |
 |---|---|---|---|
-| **Local Mode - Basic** | Vaudville Configurator manages the AI model file for the game.  Download new GGUF Models from Huggingface and let Vaudville Configurator manage everything else! | Low | GGUF File, must be related to or created from `Meta-Llama-3-8B-Instruct` (not 3.1 or later) only! |
-| **Local Mode - Advanced** | Vaudville Configurator replaces the outdated and hardcoded Llamalib built into the game, with the latest llama.cpp release and allows you to select any GGUF model and tune all the parameters! | Moderate | Must be a GGUF File compatible with latest llama.cpp, must fit into local computer VRAM along with game! |
-| **Remote Mode - OpenAI API Compatible Endpoint** | Vaudville Configurator intercepts the communcation with the outdated and hardcoded Llamalib built into the game, and lets you enter any Local or Remote OpenAI Compatible API Endpoint.  vLLM / SGLang / Llama.cpp / ExLlamaV3 / Ollama / OpenAI / Custom | Moderate to Difficult depending on Self Hosting or Remote API. | Only that the endpoint must support OpenAI API Chat Completions! |
+| **Local Mode - Basic** | Vaudeville Configurator manages the AI model file for the game.  Download new GGUF Models from Huggingface and let Vaudeville Configurator manage everything else! | Low | GGUF File, must be related to or created from `Meta-Llama-3-8B-Instruct` (not 3.1 or later) only! |
+| **Local Mode - Advanced** | Vaudeville Configurator replaces the outdated and hardcoded Llamalib built into the game, with the latest llama.cpp release and allows you to select any GGUF model and tune all the parameters! | Moderate | Must be a GGUF File compatible with latest llama.cpp, must fit into local computer VRAM along with game! |
+| **Remote Mode - OpenAI API Compatible Endpoint** | Vaudeville Configurator intercepts the communcation with the outdated and hardcoded Llamalib built into the game, and lets you enter any Local or Remote OpenAI Compatible API Endpoint.  vLLM / SGLang / Llama.cpp / ExLlamaV3 / Ollama / OpenAI / Custom | Moderate to Difficult depending on Self Hosting or Remote API. | Only that the endpoint must support OpenAI API Chat Completions! |
 
 The rest of this README follows that order: [getting it](#getting-it),
 [quickstarts](#quickstarts), [the Characters page](#characters),
@@ -60,11 +60,11 @@ Remote mode, pointed at an OpenAI-compatible service:
 ### Prebuilt binaries
 
 Each release publishes two archives on the project's Releases page
-(<https://git.phrk.org/pub/Vaudville-Configurator/releases>):
+(<https://git.phrk.org/pub/Vaudeville-Configurator/releases>):
 
 ```text
-Vaudville-Configurator.v<version>-linux-amd64.tar.gz     one Linux binary
-Vaudville-Configurator.v<version>-windows-x86_64.zip     one Windows .exe
+Vaudeville-Configurator.v<version>-linux-amd64.tar.gz     one Linux binary
+Vaudeville-Configurator.v<version>-windows-x86_64.zip     one Windows .exe
 ```
 
 Unpack and run. The binary carries its own Python and its own Tk, so there is nothing to
@@ -82,25 +82,25 @@ Windows installer includes it if you leave *tcl/tk and IDLE* ticked. Nothing els
 needed on any platform.
 
 ```bash
-python3 vaudville_configurator.py            # the GUI
+python3 Vaudeville_configurator.py            # the GUI
 ```
 
 For a command on your PATH:
 
 ```bash
-cd /path/to/Vaudville-Configurator
-ln -sfn "$PWD/vaudville_configurator.py" ~/.local/bin/vaudville-configurator
+cd /path/to/Vaudeville-Configurator
+ln -sfn "$PWD/Vaudeville_configurator.py" ~/.local/bin/Vaudeville-configurator
 ```
 
-On Windows use `tools\vaudville-configurator.cmd`, which finds `py -3` or `python` for
+On Windows use `tools\Vaudeville-configurator.cmd`, which finds `py -3` or `python` for
 you. Do not copy any of these files into the game's `Vaudeville_Data/` folder — Steam
 verifies that tree.
 
 ### Building your own single-file binary
 
 ```bash
-bash tools/build_package.sh        # Linux and macOS  ->  dist/vaudville-configurator
-tools\build_package.cmd            # run ON Windows   ->  dist\VaudvilleConfigurator.exe
+bash tools/build_package.sh        # Linux and macOS  ->  dist/Vaudeville-configurator
+tools\build_package.cmd            # run ON Windows   ->  dist\VaudevilleConfigurator.exe
 ```
 
 Both scripts make a throw-away `.venv-build/` virtualenv, install PyInstaller into it and
@@ -296,8 +296,8 @@ folder outside the game tree, checks each copy against a SHA-256 hash, and recor
 `manifest.json` with the before and after hashes and a label for each edit.
 
 ```text
-Linux, macOS   ~/.local/share/vaudville-configurator/backups/<UTC timestamp>-<game folder>/
-Windows        %LOCALAPPDATA%\vaudville-configurator\data\backups\...
+Linux, macOS   ~/.local/share/Vaudeville-configurator/backups/<UTC timestamp>-<game folder>/
+Windows        %LOCALAPPDATA%\Vaudeville-configurator\data\backups\...
 ```
 
 The **Backup / restore** page lists every backup with its timestamp, file count, game
@@ -309,9 +309,9 @@ remove them, newest first.
 From the command line:
 
 ```bash
-vaudville-configurator --cli backups
-vaudville-configurator --cli restore                    # latest
-vaudville-configurator --cli restore --backup NAME --yes
+Vaudeville-configurator --cli backups
+Vaudeville-configurator --cli restore                    # latest
+Vaudeville-configurator --cli restore --backup NAME --yes
 ```
 
 Steam's own *verify integrity of game files* is a second, independent way back to a fresh
@@ -327,8 +327,8 @@ blockers but is untested.
 **Windows.** The Steam install is found through the registry
 (`HKCU`/`HKLM\...\Valve\Steam`, then the usual `C:\Program Files (x86)\Steam`), and the
 same library-parsing code as Linux takes it from there. "Is the game running" uses
-`tasklist`. Your settings live in `%APPDATA%\vaudville-configurator`, and logs, the
-cached scan profile and backups in `%LOCALAPPDATA%\vaudville-configurator\{state,data}`;
+`tasklist`. Your settings live in `%APPDATA%\Vaudeville-configurator`, and logs, the
+cached scan profile and backups in `%LOCALAPPDATA%\Vaudeville-configurator\{state,data}`;
 XDG variables still win if you have set them. No admin rights are needed for anything
 except creating real symlinks, and that case falls back automatically to a same-volume
 hardlink, which the game cannot tell apart. A hardlink needs the model file on the same
@@ -340,9 +340,9 @@ every scan, and `tests/*.sh` are bash scripts, so run them from Git Bash or WSL 
 
 **Linux.** Steam libraries come from `libraryfolders.vdf`, plus `~/.steam`, Flatpak Steam,
 `$STEAMPATH`, a copy next to the current directory, and the current directory itself.
-Settings live in `~/.config/vaudville-configurator`, backups in
-`~/.local/share/vaudville-configurator`, and logs plus the cached scan profile in
-`~/.local/state/vaudville-configurator`.
+Settings live in `~/.config/Vaudeville-configurator`, backups in
+`~/.local/share/Vaudeville-configurator`, and logs plus the cached scan profile in
+`~/.local/state/Vaudeville-configurator`.
 
 ---
 
@@ -351,16 +351,16 @@ Settings live in `~/.config/vaudville-configurator`, backups in
 **Headless mode.** Everything the GUI does is available without it:
 
 ```bash
-vaudville-configurator --cli detect
-vaudville-configurator --cli list [--show-prompts]
-vaudville-configurator --cli models
-vaudville-configurator --cli set-model --slot primary|deck --model /path/to/Model.gguf
-vaudville-configurator --cli plan  --mode remote --backend-url http://127.0.0.1:11434/v1 \
+Vaudeville-configurator --cli detect
+Vaudeville-configurator --cli list [--show-prompts]
+Vaudeville-configurator --cli models
+Vaudeville-configurator --cli set-model --slot primary|deck --model /path/to/Model.gguf
+Vaudeville-configurator --cli plan  --mode remote --backend-url http://127.0.0.1:11434/v1 \
                                    --backend-model llama3.1:8b --set temperature=0.8
-vaudville-configurator --cli apply ...same flags... --yes
-vaudville-configurator --cli backups
-vaudville-configurator --cli restore [--backup NAME] --yes
-vaudville-configurator --cli shim-start | shim-status | shim-test | shim-stop
+Vaudeville-configurator --cli apply ...same flags... --yes
+Vaudeville-configurator --cli backups
+Vaudeville-configurator --cli restore [--backup NAME] --yes
+Vaudeville-configurator --cli shim-start | shim-status | shim-test | shim-stop
 ```
 
 `--mode` accepts the new names and the old internal keys interchangeably: `basic` or
@@ -369,7 +369,7 @@ vaudville-configurator --cli shim-start | shim-status | shim-test | shim-stop
 `--api-key-env VAR` to read the key from the environment instead of a command line,
 `--dry-run`, `--no-backup`, `--tab NAME`, `--geometry WxH`, `--verbose`, `--version`.
 
-**Self-test.** `vaudville-configurator --selftest` runs the built-in verification suite —
+**Self-test.** `Vaudeville-configurator --selftest` runs the built-in verification suite —
 mode names and aliases, platform helpers, the scanning and patching logic, and a full
 translator cycle against a mock backend. Add `--live` to also drive the game's own native
 library, or `--ci` to skip the parts that need a real install.
@@ -410,8 +410,8 @@ tag points at the commit that was actually built.
 
 ## Credit and legal
 
-Vaudville Configurator is written by **MidnightPhreaker + Qwen**.
-Source, issues and releases: <https://github.com/MidnightPhreaker/Vaudville-Configurator>
+Vaudeville Configurator is written by **MidnightPhreaker + Qwen**.
+Source, issues and releases: <https://github.com/MidnightPhreaker/Vaudeville-Configurator>
 
 This is a community tool. It is not affiliated with or endorsed by Bumblebee Studios, and
 it only reads and writes your own local copy of a game you own. Please do not redistribute
