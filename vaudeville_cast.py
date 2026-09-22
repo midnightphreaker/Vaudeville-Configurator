@@ -148,7 +148,7 @@ CAST_GROUPS: list[dict] = [
 # --------------------------------------------------------------------------- #
 
 GROUP_OF_FILE: dict[str, str] = {
-    # canonical, on-disk names (what vaudville_configurator's Blob.path.name gives)
+    # canonical, on-disk names (what vaudeville_configurator's Blob.path.name gives)
     "level4": "police_station",
     "level5": "morgue",
     "level6": "circus",

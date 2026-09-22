@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Real end-to-end test: Vaudeville's own libllamalib  ->  (a) a real llama.cpp server
 #                                                     ->  (b) shim -> llama-server /v1
-# (b) drives the SHIPPED embedded shim (`vaudville_configurator.py --shim --config <json>`,
+# (b) drives the SHIPPED embedded shim (`vaudeville_configurator.py --shim --config <json>`,
 # the entrypoint _shim_argv() spawns); tools/llamalib_shim.py is only the standalone
 # reference implementation. Headless: no GUI, no X, isolated XDG_* home.
 set -uo pipefail
@@ -14,10 +14,10 @@ for d in "$HERE/../tools" "$HERE/tools" "$HERE"; do
 done
 [ -n "$TOOLS" ] || { echo "cannot locate tools/ (llamalib_shim.py) relative to $HERE" >&2; exit 3; }
 CFG=""
-for c in "$HERE/../vaudville_configurator.py" "$HERE/vaudville_configurator.py"; do
+for c in "$HERE/../vaudeville_configurator.py" "$HERE/vaudeville_configurator.py"; do
   [ -f "$c" ] && CFG="$c" && break
 done
-[ -n "$CFG" ] || { echo "cannot locate vaudville_configurator.py relative to $HERE" >&2; exit 3; }
+[ -n "$CFG" ] || { echo "cannot locate vaudeville_configurator.py relative to $HERE" >&2; exit 3; }
 BIN="${LLAMA_BIN_DIR:-}"
 if [ -z "$BIN" ]; then
   for c in "$HERE/../tools/llama.cpp" "$HERE/tools/llama.cpp" "$HERE/../Vaudeville/.codex/analysis/tools/llama.cpp-b10889/llama-b10889" "/home/mp/Workspace/Vaudeville/.codex/analysis/tools/llama.cpp-b10889/llama-b10889"; do

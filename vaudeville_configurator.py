@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""Vaudville Configurator — model / endpoint / sampling-parameter control for
+"""Vaudeville Configurator — model / endpoint / sampling-parameter control for
 Bumblebee Studios' "Vaudeville" (Steam AppID 2240920).
 
 Single file, standard library only (tkinter for the GUI). Run it from anywhere:
 
-    vaudville-configurator                  # GUI (symlink in ~/.local/bin)
-    vaudville-configurator --cli list       # headless
-    vaudville-configurator --selftest       # built-in verification
+    vaudeville-configurator                  # GUI (symlink in ~/.local/bin)
+    vaudeville-configurator --cli list       # headless
+    vaudeville-configurator --selftest       # built-in verification
 
 Modes
 -----
@@ -94,16 +94,16 @@ from pathlib import Path
 # down — when they are missing, e.g. in a frozen single-file build that did not
 # bundle them.
 try:
-    import vaudville_cast as cast
+    import vaudeville_cast as cast
 except Exception:                                          # noqa: BLE001
     cast = None
 try:
-    import vaudville_help as helpmod
+    import vaudeville_help as helpmod
 except Exception:                                          # noqa: BLE001
     helpmod = None
 
-APP_NAME = "Vaudville Configurator"
-APP_SLUG = "vaudville-configurator"
+APP_NAME = "Vaudeville Configurator"
+APP_SLUG = "vaudeville-configurator"
 APP_VERSION = "1.4.0"
 STEAM_APPID = "2240920"
 GAME_DIR_NAME = "Vaudeville"
@@ -164,12 +164,12 @@ IS_MACOS = sys.platform == "darwin"
 # friendly metadata: field tables, the two optional sibling modules, and the
 # character groups they describe.
 #
-# vaudville_cast.py  -> which characters live in which Unity asset file
-# vaudville_help.py  -> plain-English wording, mode cards, terminology map
+# vaudeville_cast.py  -> which characters live in which Unity asset file
+# vaudeville_help.py  -> plain-English wording, mode cards, terminology map
 #
 # Both are imported guarded, so this file keeps working (with the built-in
 # fallbacks below) when they are absent, e.g. in a single-file frozen build
-# that did not bundle them.  Copy that comes from vaudville_help is rendered
+# that did not bundle them.  Copy that comes from vaudeville_help is rendered
 # byte-verbatim; TERMS is applied only to strings this file writes itself.
 # --------------------------------------------------------------------------- #
 AGENT_FIELDS_GUI = [
@@ -247,8 +247,8 @@ INERT_FIELDS = {
 }
 EMPTY_TEXT_FIELDS = ("APIKey", "grammar", "save", "SSLCert", "SSLKey", "lora", "loraWeights")
 
-GITHUB_URL_FALLBACK = "https://git.phrk.org/pub/Vaudville-Configurator"
-CREDIT_FALLBACK = ("Vaudville Configurator — a community tool for Bumblebee Studios' "
+GITHUB_URL_FALLBACK = "https://git.phrk.org/pub/Vaudeville-Configurator"
+CREDIT_FALLBACK = ("Vaudeville Configurator — a community tool for Bumblebee Studios' "
                    "Vaudeville. Not affiliated with or endorsed by Bumblebee Studios.")
 FRIENDLY_GROUP_INTRO_FALLBACK = (
     "Every speaking character in Vaudeville has its own copy of the AI settings below. "
@@ -314,7 +314,7 @@ def T(text) -> str:
     """Run a string *this file* writes through the shared terminology map.
 
     Whole words only, longest phrase first, so "LLMAgent" cannot be half-replaced
-    by an "LLM" rule.  Copy that comes from vaudville_help / vaudville_cast is
+    by an "LLM" rule.  Copy that comes from vaudeville_help / vaudeville_cast is
     already in the right words and is rendered verbatim — never pass it through
     here, and never pass identifiers, file names or mode labels through here."""
     out = "" if text is None else str(text)
@@ -401,7 +401,7 @@ SHIM_HELP = getattr(helpmod, "SHIM_HELP", None) or {}
 
 
 def setting_tip(field: str, fallback: str = "") -> str:
-    """Hover text for one setting, built from vaudville_help.SETTING_HELP:
+    """Hover text for one setting, built from vaudeville_help.SETTING_HELP:
     what it is, what it does, the range, the tips, and when (not) to touch it.
     Help-module copy is used verbatim."""
     entry = SETTING_HELP.get(field)
@@ -445,7 +445,7 @@ def help_line(mapping, keys, fallback: str = "") -> str:
 
 
 # --------------------------------------------------------------------------- #
-# character groups (vaudville_cast.py, with a single "all characters" fallback)
+# character groups (vaudeville_cast.py, with a single "all characters" fallback)
 # --------------------------------------------------------------------------- #
 def all_group_key() -> str:
     return str(getattr(cast, "ALL_KEY", None) or "all")
@@ -563,7 +563,7 @@ def group_blobs(res, key) -> list:
 
 
 def evidence_text() -> str:
-    """Optional long-form backing for the group list (vaudville_cast.EVIDENCE)."""
+    """Optional long-form backing for the group list (vaudeville_cast.EVIDENCE)."""
     return _as_text(getattr(cast, "EVIDENCE", None) if cast is not None else None)
 
 
@@ -1316,7 +1316,7 @@ def plan_edits(res: ScanResult, agent_changes: dict, llm_changes: dict,
     """Byte edits for `agent_changes` (character settings) and `llm_changes` (engine).
 
     `agent_group` optionally narrows the *character* fields to one cast group,
-    matched through vaudville_cast.GROUP_OF_FILE / CAST_GROUPS[*]["files"] against
+    matched through vaudeville_cast.GROUP_OF_FILE / CAST_GROUPS[*]["files"] against
     each component's asset file name.  The endpoint wiring fields (ENDPOINT_FIELDS)
     still go to every character, so the game never ends up half local / half
     remote.  None or cast.ALL_KEY keeps the historical uniform behaviour.
@@ -2183,7 +2183,7 @@ def build_change_set(cfg: dict, res: ScanResult, overrides: dict | None = None,
                      group=None) -> tuple[dict, dict, list[str]]:
     """Turn the GUI config into {agent_fields}, {llm_fields}, notes.
 
-    `group` (a vaudville_cast group key, or None/cast.ALL_KEY for everybody) only
+    `group` (a vaudeville_cast group key, or None/cast.ALL_KEY for everybody) only
     records the character scope in the notes here; the actual narrowing of the
     character fields happens in plan_edits(agent_group=...).
     """
@@ -2455,15 +2455,15 @@ def free_port(host: str = "127.0.0.1") -> int:
 # --------------------------------------------------------------------------- #
 # --- self-test helpers (used only by selftest() and the checks it runs) ----- #
 # The three setup cards exactly as the project owner mandated them.  This is a
-# deliberate SECOND copy of the text: vaudville_help.py holds what the UI
+# deliberate SECOND copy of the text: vaudeville_help.py holds what the UI
 # renders, this holds what was asked for, and the self-test fails the moment
 # they drift — including a "helpful" fix of the upstream `communcation`
 # spelling or of the two mandated double spaces.
 MODE_CARD_COPY = {
     MODE_OFF: {
         "title": "Local Mode - Basic",
-        "blurb": ("Vaudville Configurator manages the AI model file for the game.  "
-                  "Download new GGUF Models from Huggingface and let Vaudville "
+        "blurb": ("Vaudeville Configurator manages the AI model file for the game.  "
+                  "Download new GGUF Models from Huggingface and let Vaudeville "
                   "Configurator manage everything else!"),
         "difficulty": "Low",
         "restrictions": ("GGUF File, must be related to or created from "
@@ -2471,7 +2471,7 @@ MODE_CARD_COPY = {
     },
     MODE_DIRECT: {
         "title": "Local Mode - Advanced",
-        "blurb": ("Vaudville Configurator replaces the outdated and hardcoded "
+        "blurb": ("Vaudeville Configurator replaces the outdated and hardcoded "
                   "Llamalib built into the game, with the latest llama.cpp release "
                   "and allows you to select any GGUF model and tune all the "
                   "parameters!"),
@@ -2481,7 +2481,7 @@ MODE_CARD_COPY = {
     },
     MODE_SHIM: {
         "title": "Remote Mode - OpenAI API Compatible Endpoint",
-        "blurb": ("Vaudville Configurator intercepts the communcation with the "
+        "blurb": ("Vaudeville Configurator intercepts the communcation with the "
                   "outdated and hardcoded Llamalib built into the game, and lets "
                   "you enter any Local or Remote OpenAI Compatible API Endpoint.  "
                   "vLLM / SGLang / Llama.cpp / ExLlamaV3 / Ollama / OpenAI / Custom"),
@@ -2544,7 +2544,7 @@ def _st_gui_check(config: dict, tab: str = ""):
     except Exception as exc:                                   # noqa: BLE001
         return None, "", f"tkinter is not importable here ({type(exc).__name__}: {exc})"
     try:
-        with tempfile.TemporaryDirectory(prefix="vaudville-selftest-ui-") as td:
+        with tempfile.TemporaryDirectory(prefix="vaudeville-selftest-ui-") as td:
             env = dict(os.environ)
             env["XDG_CONFIG_HOME"] = str(Path(td) / "config")
             env["XDG_DATA_HOME"] = str(Path(td) / "data")
@@ -2713,15 +2713,15 @@ def selftest(game_dir: Path | None, live: bool, verbose: bool = True,
         check(vfile.is_file() and onfile == APP_VERSION,
               f"VERSION file ({onfile}) matches APP_VERSION ({APP_VERSION})")
 
-    print("[0c] sibling data modules (vaudville_cast / vaudville_help)")
+    print("[0c] sibling data modules (vaudeville_cast / vaudeville_help)")
     frozen = bool(getattr(sys, "frozen", False))
     where = "frozen single-file build" if frozen else "source run"
-    check(cast is not None, f"vaudville_cast imported and in use ({where})")
-    check(helpmod is not None, f"vaudville_help imported and in use ({where})")
+    check(cast is not None, f"vaudeville_cast imported and in use ({where})")
+    check(helpmod is not None, f"vaudeville_help imported and in use ({where})")
     if frozen:
         import importlib.util
         specs = {}
-        for name in ("vaudville_cast", "vaudville_help"):
+        for name in ("vaudeville_cast", "vaudeville_help"):
             try:
                 specs[name] = importlib.util.find_spec(name) is not None
             except Exception:                                  # noqa: BLE001
@@ -2735,7 +2735,7 @@ def selftest(game_dir: Path | None, live: bool, verbose: bool = True,
         here = str(Path(__file__).resolve().parent)
         cenv = dict(os.environ,
                     PYTHONPATH=here + os.pathsep + os.environ.get("PYTHONPATH", ""))
-        for name in ("vaudville_cast", "vaudville_help"):
+        for name in ("vaudeville_cast", "vaudeville_help"):
             proc = subprocess.run([sys.executable, "-c", f"import {name}"], env=cenv,
                                   capture_output=True, text=True, timeout=60)
             imports[name] = proc.returncode == 0
@@ -2749,10 +2749,10 @@ def selftest(game_dir: Path | None, live: bool, verbose: bool = True,
     help_names = ("MODE_CARDS", "TERMS", "GROUP_HELP", "SETTING_HELP", "MODEL_HELP",
                   "SHIM_HELP", "CREDIT", "GITHUB_URL")
     gaps = [n for n in cast_names if cast is None or not hasattr(cast, n)]
-    check(not gaps, f"vaudville_cast exports all {len(cast_names)} contract names"
+    check(not gaps, f"vaudeville_cast exports all {len(cast_names)} contract names"
                     + (f" — missing: {gaps}" if gaps else ""))
     gaps = [n for n in help_names if helpmod is None or not hasattr(helpmod, n)]
-    check(not gaps, f"vaudville_help exports all {len(help_names)} contract names"
+    check(not gaps, f"vaudeville_help exports all {len(help_names)} contract names"
                     + (f" — missing: {gaps}" if gaps else ""))
     raw_cards = getattr(helpmod, "MODE_CARDS", None) or {}
     check(isinstance(raw_cards, dict) and set(raw_cards) == set(MODE_ORDER)
@@ -2821,7 +2821,7 @@ def selftest(game_dir: Path | None, live: bool, verbose: bool = True,
 
     print("[0f] cast data and group-scoped patching")
     if cast is None:
-        check(False, "vaudville_cast did not import, so none of the cast checks ran")
+        check(False, "vaudeville_cast did not import, so none of the cast checks ran")
     else:
         from types import SimpleNamespace
         groups = cast_groups()
@@ -2958,11 +2958,11 @@ def selftest(game_dir: Path | None, live: bool, verbose: bool = True,
                   for m in MODE_ORDER),
           "every tab has its own non-empty title and the mode tabs use the mode label")
     check(CREDIT == "MidnightPhreaker + Qwen", f"CREDIT = {CREDIT!r}")
-    check(GITHUB_URL == "https://github.com/MidnightPhreaker/Vaudville-Configurator",
+    check(GITHUB_URL == "https://github.com/MidnightPhreaker/Vaudeville-Configurator",
           f"GITHUB_URL = {GITHUB_URL!r}")
     check(CREDIT == str(getattr(helpmod, "CREDIT", ""))
           and GITHUB_URL == str(getattr(helpmod, "GITHUB_URL", "")),
-          "the credit and project link come from vaudville_help, not from the local fallback")
+          "the credit and project link come from vaudeville_help, not from the local fallback")
 
     print("[1] ThinkStripper")
     cases = [(["<think>secret</think>Hi there!"], "Hi there!"),
@@ -3559,7 +3559,7 @@ def add_tip(widget, text: str, wraplength: int = 460):
     which is how the "in use now" and scope lines get their hover text later."""
     tip = ToolTip(widget, text, wraplength=wraplength)
     try:
-        widget._vaudville_tip = tip              # keep it alive
+        widget._vaudeville_tip = tip              # keep it alive
     except Exception:                            # noqa: BLE001
         pass
     return tip
@@ -3822,13 +3822,13 @@ def gui_main(args) -> int:
             sb.pack(side="right", fill="y")
             canv.bind("<Configure>",
                       lambda e, w=win: canv.itemconfigure(w, width=e.width))
-            inner._vaudville_canvas = canv
+            inner._vaudeville_canvas = canv
             return inner
 
         def _wheel_all(self, event):
             w = event.widget
             while w is not None and not isinstance(w, tk.Toplevel):
-                canv = getattr(w, "_vaudville_canvas", None)
+                canv = getattr(w, "_vaudeville_canvas", None)
                 if canv is not None:
                     try:
                         canv.yview_scroll(-1 if event.num == 4 else 1, "units")

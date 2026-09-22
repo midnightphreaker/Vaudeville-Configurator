@@ -2,23 +2,23 @@
 # Build the single-file executable for the CURRENT platform (Linux/macOS).
 # Windows: use tools\build_package.cmd on a Windows machine (no cross-compile).
 #
-#   bash tools/build_package.sh            -> dist/vaudville-configurator
+#   bash tools/build_package.sh            -> dist/vaudeville-configurator
 #   NAME=myname bash tools/build_package.sh
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$HERE/.." && pwd)"
 cd "$ROOT"
-NAME="${NAME:-vaudville-configurator}"
+NAME="${NAME:-vaudeville-configurator}"
 VENV="${VENV:-.venv-build}"          # build-only venv; never touches system python
 
 # Pure-python data modules the GUI depends on.  Declared explicitly so the
-# bundle is correct however vaudville_configurator.py imports them: top level,
+# bundle is correct however vaudeville_configurator.py imports them: top level,
 # inside a "try: ... except ImportError:" fallback, or lazily inside a
-# function.  The generated vaudville-configurator.spec is NOT a sync peer
+# function.  The generated vaudeville-configurator.spec is NOT a sync peer
 # (pyinstaller regenerates it on every build); the three entry points - this
 # script, tools/build_package.cmd and the release workflow - are the source of
 # truth and must carry the same list.
-EXTRA_MODULES="${EXTRA_MODULES:-vaudville_cast vaudville_help}"
+EXTRA_MODULES="${EXTRA_MODULES:-vaudeville_cast vaudeville_help}"
 
 if [ ! -x "$VENV/bin/pyinstaller" ]; then
   if ! python3 -m venv "$VENV" >/dev/null 2>&1 \
@@ -40,7 +40,7 @@ done
 
 # ${HIDDEN[@]+...} keeps "set -u" happy on bash 3.2 (macOS) if the list is empty.
 "$VENV/bin/pyinstaller" --onefile --clean --name "$NAME" \
-  ${HIDDEN[@]+"${HIDDEN[@]}"} vaudville_configurator.py
+  ${HIDDEN[@]+"${HIDDEN[@]}"} vaudeville_configurator.py
 
 # Prove the data modules really landed inside the bundle.  A module whose .py
 # is absent from the tree is skipped: PyInstaller only warns about an

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # End-to-end verification: Vaudeville's own libllamalib -> shim -> mock OpenAI backend
-# The shim under test is the SHIPPED one -- `vaudville_configurator.py --shim --config <json>`,
+# The shim under test is the SHIPPED one -- `vaudeville_configurator.py --shim --config <json>`,
 # the exact entrypoint _shim_argv() spawns -- not tools/llamalib_shim.py, which stays only as
 # the standalone reference implementation. Headless protocol test: no GUI, no X, and an
 # isolated XDG_* home so nothing is written to the real config/state or the game install.
@@ -14,10 +14,10 @@ for d in "$HERE/../tools" "$HERE/tools" "$HERE"; do
 done
 [ -n "$TOOLS" ] || { echo "cannot locate tools/ (llamalib_shim.py) relative to $HERE" >&2; exit 3; }
 CFG=""
-for c in "$HERE/../vaudville_configurator.py" "$HERE/vaudville_configurator.py"; do
+for c in "$HERE/../vaudeville_configurator.py" "$HERE/vaudeville_configurator.py"; do
   [ -f "$c" ] && CFG="$c" && break
 done
-[ -n "$CFG" ] || { echo "cannot locate vaudville_configurator.py relative to $HERE" >&2; exit 3; }
+[ -n "$CFG" ] || { echo "cannot locate vaudeville_configurator.py relative to $HERE" >&2; exit 3; }
 # every port is overridable so two runs cannot collide
 MOCK_PORT="${MOCK_PORT:-18080}"
 SHIM_PORT="${SHIM_PORT:-13333}"

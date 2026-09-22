@@ -1,10 +1,10 @@
-"""Vaudville Configurator - the human-language layer.
+"""Vaudeville Configurator - the human-language layer.
 
 Pure data: no imports, no logic, standard library not even required.  Import it
-standalone (``import vaudville_help``) and read the constants.
+standalone (``import vaudeville_help``) and read the constants.
 
 Every string here is written for somebody who has never heard of an LLM.  The
-GUI (vaudville_configurator.py) owns the widgets; this module owns the voice.
+GUI (vaudeville_configurator.py) owns the widgets; this module owns the voice.
 
 Contract
 --------
@@ -45,7 +45,7 @@ is an editor show/hide flag with no effect in play.  The game rewrites
 ``numGPULayers``, ``model``, ``slot`` and ``systemPrompt`` at runtime.
 """
 
-GITHUB_URL = "https://github.com/MidnightPhreaker/Vaudville-Configurator"
+GITHUB_URL = "https://github.com/MidnightPhreaker/Vaudeville-Configurator"
 CREDIT = "MidnightPhreaker + Qwen"
 
 # --------------------------------------------------------------------------- #
@@ -54,8 +54,8 @@ CREDIT = "MidnightPhreaker + Qwen"
 MODE_CARDS: dict[str, dict] = {
     "off": {
         "title": "Local Mode - Basic",
-        "blurb": ("Vaudville Configurator manages the AI model file for the game.  "
-                  "Download new GGUF Models from Huggingface and let Vaudville "
+        "blurb": ("Vaudeville Configurator manages the AI model file for the game.  "
+                  "Download new GGUF Models from Huggingface and let Vaudeville "
                   "Configurator manage everything else!"),
         "difficulty": "Low",
         "restrictions": ("GGUF File, must be related to or created from "
@@ -63,7 +63,7 @@ MODE_CARDS: dict[str, dict] = {
     },
     "direct": {
         "title": "Local Mode - Advanced",
-        "blurb": ("Vaudville Configurator replaces the outdated and hardcoded "
+        "blurb": ("Vaudeville Configurator replaces the outdated and hardcoded "
                   "Llamalib built into the game, with the latest llama.cpp release "
                   "and allows you to select any GGUF model and tune all the "
                   "parameters!"),
@@ -73,7 +73,7 @@ MODE_CARDS: dict[str, dict] = {
     },
     "shim": {
         "title": "Remote Mode - OpenAI API Compatible Endpoint",
-        "blurb": ("Vaudville Configurator intercepts the communcation with the "
+        "blurb": ("Vaudeville Configurator intercepts the communcation with the "
                   "outdated and hardcoded Llamalib built into the game, and lets "
                   "you enter any Local or Remote OpenAI Compatible API Endpoint.  "
                   "vLLM / SGLang / Llama.cpp / ExLlamaV3 / Ollama / OpenAI / Custom"),

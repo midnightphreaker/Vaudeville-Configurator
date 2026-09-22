@@ -34,10 +34,10 @@ command -v xdotool >/dev/null || echo "note: xdotool missing - a hover tooltip m
 
 TMP="$(mktemp -d)"
 export XDG_CONFIG_HOME="$TMP/config" XDG_STATE_HOME="$TMP/state" XDG_DATA_HOME="$TMP/data"
-mkdir -p "$XDG_CONFIG_HOME/vaudville-configurator" "$XDG_STATE_HOME" "$XDG_DATA_HOME"
-CFG="$XDG_CONFIG_HOME/vaudville-configurator/config.json"
+mkdir -p "$XDG_CONFIG_HOME/vaudeville-configurator" "$XDG_STATE_HOME" "$XDG_DATA_HOME"
+CFG="$XDG_CONFIG_HOME/vaudeville-configurator/config.json"
 
-GAME="${GAME:-$(python3 vaudville_configurator.py --cli detect 2>/dev/null | head -1 | cut -f1)}"
+GAME="${GAME:-$(python3 vaudeville_configurator.py --cli detect 2>/dev/null | head -1 | cut -f1)}"
 [ -n "$GAME" ] || { echo "no Vaudeville install found; set GAME=/path/to/Vaudeville" >&2; exit 3; }
 echo "### game dir: $GAME"
 echo "### output:   $(cd "$OUT" && pwd)"
@@ -100,7 +100,7 @@ shot() {
   local quit
   quit="$(awk -v w="$WAIT" 'BEGIN{printf "%.1f", w+4}')"
   write_cfg "$mode" "$confirmed" "$group" "$url" "$model" "$host" "$port"
-  python3 vaudville_configurator.py --tab "$tab" --geometry "$geo" --quit-after "$quit" \
+  python3 vaudeville_configurator.py --tab "$tab" --geometry "$geo" --quit-after "$quit" \
       >"$TMP/gui-$name.log" 2>&1 &
   local gui=$!
   sleep "$WAIT"
