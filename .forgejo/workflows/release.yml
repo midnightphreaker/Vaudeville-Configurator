@@ -12,7 +12,7 @@ on:
         options: [Major, minor, retry]
 
 env:
-  REPO_NAME: Vaudville-Configurator
+  REPO_NAME: Vaudeville-Configurator
 
 jobs:
   gate:
@@ -135,13 +135,13 @@ jobs:
         run: |
           set -euo pipefail
           python3 -c "import tkinter; print('tkinter OK')"
-          python3 vaudville_configurator.py --selftest --ci
+          python3 vaudeville_configurator.py --selftest --ci
           bash -n tests/run_e2e_test.sh tests/run_direct_llama_test.sh \
                   tests/run_real_backend_test.sh tools/build_package.sh
           if command -v Xvfb >/dev/null 2>&1; then
             Xvfb :99 -screen 0 1400x1000x24 -nolisten tcp & XPID=$!
             sleep 1
-            DISPLAY=:99 python3 vaudville_configurator.py --gui-check
+            DISPLAY=:99 python3 vaudeville_configurator.py --gui-check
             kill "$XPID"
           else
             echo "### Xvfb unavailable; skipping --gui-check"
@@ -157,7 +157,7 @@ jobs:
           v="${{ needs.gate.outputs.version }}"
           name="${REPO_NAME}.v${v}-linux-amd64.tar.gz"
           mkdir -p pkg
-          cp dist/vaudville-configurator README.md VERSION pkg/
+          cp dist/vaudeville-configurator README.md VERSION pkg/
           tar czf "$name" -C pkg .
           sha256sum "$name"
           curl -sf -H "Authorization: token $TOKEN" -F "attachment=@${name};filename=${name}" \
@@ -191,23 +191,23 @@ jobs:
         run: |
           set -euo pipefail
           # Pure-python data modules the GUI depends on.  Declared explicitly so
-          # the bundle is correct however vaudville_configurator.py imports them
+          # the bundle is correct however vaudeville_configurator.py imports them
           # (top level, inside a "try: ... except ImportError:" fallback, or
           # lazily inside a function).  The generated .spec is not a sync peer;
           # tools/build_package.sh and tools/build_package.cmd carry the same list.
-          extra_modules="vaudville_cast vaudville_help"
+          extra_modules="vaudeville_cast vaudeville_help"
           hidden=()
           for m in $extra_modules; do hidden+=(--hidden-import "$m"); done
-          pyinstaller --onefile --clean --name VaudvilleConfigurator \
-            ${hidden[@]+"${hidden[@]}"} vaudville_configurator.py
-          ls -la dist/VaudvilleConfigurator.exe
+          pyinstaller --onefile --clean --name VaudevilleConfigurator \
+            ${hidden[@]+"${hidden[@]}"} vaudeville_configurator.py
+          ls -la dist/VaudevilleConfigurator.exe
           # Prove the data modules really landed inside the .exe.  A module whose
           # .py is absent from this checkout is skipped: PyInstaller only warns
           # about an unresolvable --hidden-import, and that must not fail a build.
           # Wine's python ends every line with CR, which silently defeats a
           # bare "$" anchor, so strip CR before asserting on the listing.
           listing="$(python -m PyInstaller.utils.cliutils.archive_viewer -l -r -b \
-                       dist/VaudvilleConfigurator.exe 2>/dev/null | tr -d '\r' || true)"
+                       dist/VaudevilleConfigurator.exe 2>/dev/null | tr -d '\r' || true)"
           if [ -z "$listing" ]; then
             echo "### WARNING: archive_viewer gave no output under Wine; bundle contents unverified"
           else
@@ -217,7 +217,7 @@ jobs:
               elif grep -qE "^[[:space:]]*$m[[:space:]]*$" <<<"$listing"; then
                 echo "### bundle contains $m"
               else
-                echo "### ERROR: $m is missing from dist/VaudvilleConfigurator.exe" >&2
+                echo "### ERROR: $m is missing from dist/VaudevilleConfigurator.exe" >&2
                 exit 1
               fi
             done
@@ -226,11 +226,11 @@ jobs:
         working-directory: src
         run: |
           set -euo pipefail
-          wine dist/VaudvilleConfigurator.exe --version
+          wine dist/VaudevilleConfigurator.exe --version
           Xvfb :9 -screen 0 1024x768x24 >/dev/null 2>&1 &
           XPID=$!
           sleep 2
-          DISPLAY=:9 wine dist/VaudvilleConfigurator.exe --gui-check
+          DISPLAY=:9 wine dist/VaudevilleConfigurator.exe --gui-check
           kill "$XPID" 2>/dev/null || true
       - name: package and upload to the release
         working-directory: src
@@ -241,7 +241,7 @@ jobs:
           set -euo pipefail
           v="${{ needs.gate.outputs.version }}"
           NAME="${REPO_NAME}.v${v}-windows-x86_64.zip"
-          python -m zipfile -c "$NAME" dist/VaudvilleConfigurator.exe README.md VERSION
+          python -m zipfile -c "$NAME" dist/VaudevilleConfigurator.exe README.md VERSION
           curl -sf -H "Authorization: token $TOKEN" -F "attachment=@${NAME};filename=${NAME}" \
                "${{ github.server_url }}/api/v1/repos/${{ github.repository }}/releases/${RELEASE_ID}/assets" >/dev/null
           echo "### uploaded $NAME to release $RELEASE_ID"
@@ -293,9 +293,9 @@ jobs:
         run: |
           set -euo pipefail
           python3 tools/bump_version.py "$VER"
-          git config user.name "Vaudville Release Bot"
+          git config user.name "Vaudeville Release Bot"
           git config user.email "killbot-prime@phrk.org"
-          git add VERSION vaudville_configurator.py
+          git add VERSION vaudeville_configurator.py
           msg="chore(release): bump version to $VER
 
           - VERSION and APP_VERSION synchronised after the v$VER release published.
